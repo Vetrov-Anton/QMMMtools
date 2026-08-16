@@ -9,6 +9,7 @@ description = "QM/MM topology preparation with link atoms for GROMACS + DFTB+/xT
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
+authors = [{ name = "Anton Vetrov", email = "vetrov.anton.a@gmail.com" }]
 keywords = ["QM/MM", "GROMACS", "DFTB+", "xTB", "link atoms", "molecular dynamics"]
 classifiers = [
     "Intended Audience :: Science/Research",
@@ -20,6 +21,11 @@ dependencies = [
     "parmed>=4.0",
     "numpy>=1.20",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Vetrov-Anton/QMMMtools"
+Repository = "https://github.com/Vetrov-Anton/QMMMtools"
+Issues = "https://github.com/Vetrov-Anton/QMMMtools/issues"
 
 [project.scripts]
 qmmmtools = "QMMMtools.cli:main"

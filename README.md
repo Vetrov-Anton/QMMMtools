@@ -36,8 +36,7 @@ a command line tool.
 
 ## Installation
 
-Everything installs straight from GitHub — replace `<you>` with the account that hosts
-this repository.
+Everything installs straight from GitHub.
 
 ### For the command line tool — `pipx`
 
@@ -45,7 +44,7 @@ this repository.
 isolated environment, so nothing is added to your system or conda Python:
 
 ```bash
-pipx install git+https://github.com/<you>/QMMMtools.git
+pipx install git+https://github.com/Vetrov-Anton/QMMMtools.git
 ```
 
 ```bash
@@ -67,7 +66,7 @@ pipx uninstall QMMMtools
 environment you actually work in:
 
 ```bash
-pip install git+https://github.com/<you>/QMMMtools.git
+pip install git+https://github.com/Vetrov-Anton/QMMMtools.git
 ```
 
 Installing both ways is perfectly reasonable: pipx for the command, pip for the library.
@@ -75,7 +74,7 @@ Installing both ways is perfectly reasonable: pipx for the command, pip for the 
 ### From a clone
 
 ```bash
-git clone https://github.com/<you>/QMMMtools.git
+git clone https://github.com/Vetrov-Anton/QMMMtools.git
 cd QMMMtools
 pip install -e .        # editable: your edits to QMMMtools/data.py take effect at once
 pipx install .          # or the command line tool from the same clone
@@ -423,7 +422,7 @@ to `data.TYPE2ELEMENT`.
 coordinate file do not describe the same system.
 
 **`import QMMMtools` fails after `pipx install`.** Expected — pipx isolates the package
-from your interpreter. Use `pip install git+https://github.com/<you>/QMMMtools.git` for library use.
+from your interpreter. Use `pip install git+https://github.com/Vetrov-Anton/QMMMtools.git` for library use.
 
 ---
 
