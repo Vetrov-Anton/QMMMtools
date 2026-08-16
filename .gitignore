@@ -1,0 +1,35 @@
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# --- files QMMMtools writes -------------------------------------------------
+qm*.gro
+qm*.top
+qm*.ndx
+dftb_in*.hsd
+dftb_pin.hsd
+dftb_in.out
+charges.bin
+
+# --- GROMACS run output -----------------------------------------------------
+*.tpr
+*.edr
+*.trr
+*.xtc
+*.cpt
+*.log
+mdout.mdp
+\#*\#
+step*.pdb
+
+# --- large example inputs ---------------------------------------------------
+# Remove these three lines if you want to ship the example system with the repo.
+npt4.gro
+topol.top
+amber-99sb-ildn.ff/

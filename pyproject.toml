@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "QMMMtools"
+version = "1.0.0"
+description = "QM/MM topology preparation with link atoms for GROMACS + DFTB+/xTB"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["QM/MM", "GROMACS", "DFTB+", "xTB", "link atoms", "molecular dynamics"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "parmed>=4.0",
+    "numpy>=1.20",
+]
+
+[project.scripts]
+qmmmtools = "QMMMtools.cli:main"
+
+[project.optional-dependencies]
+notebook = ["jupyter"]
+
+[tool.setuptools]
+packages = ["QMMMtools"]
