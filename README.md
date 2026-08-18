@@ -1,7 +1,6 @@
 # QMMMtools
 
 QM/MM topology preparation with link atoms for **GROMACS + DFTB+/xTB**.
-
 Carves a QM region out of a finished classical GROMACS system and writes four files
 that are guaranteed to describe the same atoms in the same order:
 
@@ -11,6 +10,9 @@ that are guaranteed to describe the same atoms in the same order:
 | `qm.gro` | coordinates **in the topology's atom order**, velocities preserved |
 | `qm.ndx` | `[ QM ]` (QM atoms + link atoms), plus `[ freeze ]` and `[ Water_and_ions ]` |
 | `dftb_in.hsd` | DFTB+/xTB input with the QM atoms **in the same order as `[ QM ]`** |
+
+NOTE: all ligands should be introduced directly into forcefield as .rtps (NOT .itps) !!!
+We recommend to use our python module **[ligtools](https://github.com/Vetrov-Anton/ligtools)** for these purposes. 
 
 Works with proteins, nucleic acids, lipids and arbitrary ligands — switching system
 type means replacing two tables, nothing else. Usable both as a Python library and as
