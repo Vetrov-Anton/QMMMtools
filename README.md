@@ -12,6 +12,7 @@ that are guaranteed to describe the same atoms in the same order:
 | `dftb_in.hsd` | DFTB+/xTB input with the QM atoms **in the same order as `[ QM ]`** |
 
 NOTE: all ligands should be introduced directly into forcefield as .rtps (NOT .itps) !!!
+
 We recommend to use our python module **[ligtools](https://github.com/Vetrov-Anton/ligtools)** for these purposes. 
 
 Works with proteins, nucleic acids, lipids and arbitrary ligands — switching system
