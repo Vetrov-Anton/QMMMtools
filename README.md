@@ -402,9 +402,10 @@ qm.redistr_residues.discard('PRO')
 # --- a water model with an unusual residue name --------------------------
 qm.solvent_and_ions.add('T4P')
 
-# --- a new element -------------------------------------------------------
+# --- a new element, from a set other than 3ob ----------------------------
+data.MAX_ANGULAR_MOMENTUM_OTHER['Se'] = 'd'      # merged into MAX_ANGULAR_MOMENTUM
 data.MAX_ANGULAR_MOMENTUM['Se'] = 'd'
-data.HUBBARD_DERIVS['Se'] = -0.11
+data.HUBBARD_DERIVS['Se'] = -0.11                # only needed by the DFTB3 methods
 
 # --- a new QM method -----------------------------------------------------
 data.QM_METHODS['gfn0-xtb'] = data.QMMethod(
@@ -425,8 +426,9 @@ missing `MaxAngularMomentum` / `HubbardDerivs` raises with the name of the eleme
 | `AMINO_ACIDS`, `NUCLEIC_ACIDS`, `POLYMER_RESIDUES` | default charge acceptors |
 | `*_BREAKABLE_BONDS`, `*_H_DIST` | where the QM region may be cut, and the link-atom distance |
 | `H_DIST_BY_ELEMENT` | fall-back X–H bond lengths |
-| `ELEMENTS`, `TYPE2ELEMENT`, `guess_element` | element determination |
-| `MAX_ANGULAR_MOMENTUM`, `HUBBARD_DERIVS` | DFTB parameters per element |
+| `ELEMENTS`, `TYPE2ELEMENT`, `SPECIAL_SITE_ELEMENTS`, `guess_element` | element determination |
+| `MAX_ANGULAR_MOMENTUM_3OB`, `HUBBARD_DERIVS` | the fifteen elements of 3ob-3-1, straight from its README |
+| `MAX_ANGULAR_MOMENTUM_OTHER` | elements from other Slater–Koster sets, merged into `MAX_ANGULAR_MOMENTUM` |
 | `QM_METHODS` | the `Hamiltonian` blocks |
 
 ## Consistency
