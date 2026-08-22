@@ -405,14 +405,60 @@ def hamiltonian_block(method, elements, charge, skpath=None, sk_suffix='-c.spl',
     return ''.join(text)
 
 
-ANALYSIS_BLOCK = ('Analysis = {\n'
-                  '  CalculateForces = Yes\n'
-                  '  ProjectStates = {}\n'
-                  '  WriteEigenvectors = No\n'
-                  '  WriteBandOut = No\n'
-                  '  MullikenAnalysis = No\n'
-                  '  AtomResolvedEnergies = No\n'
-                  '}\n')
+# DFTB+ renamed the Analysis keyword that switches the forces on in release
+# 24.1: "CalculateForces" became "PrintForces", with no alias for the old
+# spelling.  Everything else this module writes -- the Hamiltonian, the mixers,
+# the dispersion and H-correction blocks, Options -- parses identically in 21.x
+# and 25.x, so the release only decides that one word.
+DEFAULT_DFTBPLUS_VERSION = '25.1'
+OLDEST_DFTBPLUS_VERSION = (21, 0)
+FORCES_KEYWORD_RENAMED_IN = (24, 1)
+
+
+def parse_dftbplus_version(version=None):
+    """``25``, ``'25.1'``, ``(24, 1)`` -> a ``(major, minor)`` tuple."""
+    if version is None:
+        version = DEFAULT_DFTBPLUS_VERSION
+    if isinstance(version, (tuple, list)):
+        parts = [int(part) for part in version]
+    else:
+        text = str(version).strip().lower().lstrip('v')
+        try:
+            parts = [int(part) for part in text.split('.')[:2]]
+        except ValueError:
+            raise QMMMError(f'cannot read the DFTB+ version {version!r}; '
+                            "give it as 21, '23.1' or '25.1'") from None
+    if not parts:
+        raise QMMMError(f'cannot read the DFTB+ version {version!r}')
+    # DFTB+ numbers its releases YY.1, YY.2 ...; a bare year means that series
+    parsed = (parts[0], parts[1] if len(parts) > 1 else 1)
+    if parsed < OLDEST_DFTBPLUS_VERSION:
+        raise QMMMError(f'DFTB+ {parsed[0]}.{parsed[1]} is not supported; '
+                        f'the oldest release this module writes input for is '
+                        f'{OLDEST_DFTBPLUS_VERSION[0]}.{OLDEST_DFTBPLUS_VERSION[1]}')
+    return parsed
+
+
+def forces_keyword(dftbplus_version=None):
+    """Name of the Analysis switch that makes DFTB+ return the forces."""
+    return ('PrintForces' if parse_dftbplus_version(dftbplus_version) >= FORCES_KEYWORD_RENAMED_IN
+            else 'CalculateForces')
+
+
+def analysis_block(dftbplus_version=None):
+    """The ``Analysis`` block, spelled for the given DFTB+ release."""
+    return ('Analysis = {\n'
+            f'  {forces_keyword(dftbplus_version)} = Yes\n'
+            '  ProjectStates = {}\n'
+            '  WriteEigenvectors = No\n'
+            '  WriteBandOut = No\n'
+            '  MullikenAnalysis = No\n'
+            '  AtomResolvedEnergies = No\n'
+            '}\n')
+
+
+#: the Analysis block for the default release; analysis_block() for any other
+ANALYSIS_BLOCK = analysis_block()
 
 OPTIONS_BLOCK = ('Options = {\n'
                  '  WriteDetailedOut = No\n'
@@ -431,27 +477,36 @@ OPTIONS_BLOCK = ('Options = {\n'
 
 
 def write_hsd(file_hsd, geometry, charge, method=DEFAULT_QM_METHOD, skpath=None,
-              analysis=ANALYSIS_BLOCK, options=OPTIONS_BLOCK, extra='', **hamiltonian_kwargs):
-    """Write a complete ``dftb_in.hsd`` from a :class:`QMGeometry`."""
+              dftbplus_version=None, analysis=None, options=OPTIONS_BLOCK, extra='',
+              **hamiltonian_kwargs):
+    """Write a complete ``dftb_in.hsd`` from a :class:`QMGeometry`.
+
+    ``dftbplus_version`` selects the input dialect: 24.1 and later want
+    ``Analysis { PrintForces }``, 21.x to 23.x want ``CalculateForces``.
+    """
     if geometry.elements is None:
         raise QMMMError('the elements of the QM atoms are unknown; pass elements= to '
                         'read_qm_geometry(), or use rewrite_hsd() which can inherit the '
                         'TypeNames of the file it rewrites')
+    release = parse_dftbplus_version(dftbplus_version)
     elements = geometry.type_names
     text = geometry.block()
     text += hamiltonian_block(method, elements, charge, skpath=skpath, **hamiltonian_kwargs)
-    text += (analysis or '') + (options or '')
+    text += (analysis_block(release) if analysis is None else (analysis or ''))
+    text += options or ''
     if extra:
         text += extra if extra.endswith('\n') else extra + '\n'
     path = HsdFile(text).write(file_hsd)
-    LOGGER.info('wrote %s: %s, %d atoms, elements %s, charge %+d', path,
-                get_method(method).name, len(geometry), ' '.join(elements), round(charge))
+    LOGGER.info('wrote %s: %s, %d atoms, elements %s, charge %+d, DFTB+ %d.%d syntax (%s)',
+                path, get_method(method).name, len(geometry), ' '.join(elements), round(charge),
+                release[0], release[1], forces_keyword(release))
     return path
 
 
 def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, method=None,
                 charge=None, skpath=None, scc_tolerance=None, max_scc_iterations=None,
-                mixer=None, analysis=None, options=None, blocks=None, **hamiltonian_kwargs):
+                mixer=None, dftbplus_version=None, analysis=None, options=None, blocks=None,
+                **hamiltonian_kwargs):
     """Update parts of an existing ``dftb_in.hsd`` in place.
 
     Everything that is not addressed stays byte for byte as it was, so
@@ -471,8 +526,13 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
         (from ``charge`` or the old file).
     charge, skpath, scc_tolerance, max_scc_iterations, mixer
         patched into the existing ``Hamiltonian`` when ``method`` is None.
+    dftbplus_version : str or float, optional
+        rewrite the ``Analysis`` block for that DFTB+ release, which is how an
+        input is moved between the ``CalculateForces`` (21.x-23.x) and
+        ``PrintForces`` (24.1 and later) dialects.
     analysis, options : str, optional
-        replace the ``Analysis`` / ``Options`` blocks; ``''`` removes them.
+        replace the ``Analysis`` / ``Options`` blocks outright; ``''`` removes
+        them.  Takes precedence over ``dftbplus_version``.
     blocks : dict, optional
         any other top-level blocks, ``{'Driver': 'Driver = {}'}``; a value of
         ``None`` deletes the block.
@@ -547,6 +607,21 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
                 raise QMMMError(f'{file_hsd}: no SlaterKosterFiles block to point elsewhere')
             hsd.set_value('Prefix', path, sk[2:4], indent='    ')
             changed.append(f'skpath {path}')
+
+    if dftbplus_version is not None and analysis is None:
+        release = parse_dftbplus_version(dftbplus_version)
+        wanted, unwanted = forces_keyword(release), forces_keyword(
+            (21, 1) if release >= FORCES_KEYWORD_RENAMED_IN else (25, 1))
+        span = hsd.block_span('Analysis')
+        if span is None:
+            hsd.set_block('Analysis', analysis_block(release))
+        elif hsd.get_value(wanted, span[2:4]) is None:
+            # rename in place, so anything else in the block survives
+            body = hsd.text[span[2]:span[3]]
+            hsd.text = (hsd.text[:span[2]] + re.sub(r'(?m)^([ \t]*)' + unwanted + r'\b',
+                                                    r'\1' + wanted, body)
+                        + hsd.text[span[3]:])
+        changed.append(f'DFTB+ {release[0]}.{release[1]} syntax ({wanted})')
 
     for name, text in (('Analysis', analysis), ('Options', options)):
         if text is not None:
@@ -1263,13 +1338,23 @@ class QM:
         self.qm_mol.add_atom(atom, 'XXX', res_n, chain='')
         return atom
 
-    def vs2_and_LA(self, link_la_to_mm1=True):
+    def vs2_and_LA(self, link_la_to_mm1=True, link_la_to_mm2=False):
         """Place a link atom on every QM/MM bond as a two-body virtual site.
 
         The site sits on the QM--MM axis at ``H_dist`` from the QM atom, so its
-        Gromacs construction weight is ``d / |r_QM-MM|``.  With
-        ``link_la_to_mm1`` a funct-5 bond to the MM atom is added as well, which
-        is what makes grompp generate the exclusions around the link atom.
+        Gromacs construction weight is ``d / |r_QM-MM|``.
+
+        The two flags add funct-5 bonds -- "connections" that carry no potential
+        and exist only so that grompp generates exclusions around the link atom.
+        They are independent and can be combined freely:
+
+        ``link_la_to_mm1``
+            one bond to the MM atom the link atom caps.  With ``nrexcl = 3`` this
+            already excludes the link atom from everything within three bonds of
+            MM1.
+        ``link_la_to_mm2``
+            one bond to each further MM neighbour of MM1 (the MM2 atoms of that
+            link atom), which pushes the exclusion shell one bond further out.
         """
         self.vs2 = []
         self.LA_indexes = []
@@ -1277,6 +1362,7 @@ class QM:
         res_n = len(self.qm_mol.residues)
         atom_n = len(self.qm_mol.atoms)
         xyz = self.qm_mol.coordinates
+        n_mm1_bonds = n_mm2_bonds = 0
         for bond in self.qmmm_bonds:
             aqm, amm = ((bond.atom1, bond.atom2) if bond.atom1.idx in self.qm_idx
                         else (bond.atom2, bond.atom1))
@@ -1292,16 +1378,31 @@ class QM:
             self.LA_indexes.append(atom_n)
             self.la_idx.append(atom_n)
             if link_la_to_mm1:
-                bond5 = pmd.Bond(self.qm_mol.atoms[amm.idx], link)
-                bond5.funct = 5
-                self.qm_mol.bonds.append(bond5)
+                self._add_connection(self.qm_mol.atoms[amm.idx], link)
+                n_mm1_bonds += 1
+            if link_la_to_mm2:
+                for mm2 in self._mm2_partners(self.qm_mol.atoms[amm.idx]):
+                    self._add_connection(self.qm_mol.atoms[mm2.idx], link)
+                    n_mm2_bonds += 1
             res_n += 1
             atom_n += 1
         self.qm_group_idx = sorted(self.qm_idx | set(self.la_idx))
         self.qm_mask = '@' + ','.join(str(i + 1) for i in self.qm_group_idx)
         self.qm = self.qm_mol.view[self.qm_mask]
+        made = []
+        if link_la_to_mm1:
+            made.append(f'{n_mm1_bonds} to their MM1 atom')
+        if link_la_to_mm2:
+            made.append(f'{n_mm2_bonds} to their MM2 atoms')
         LOGGER.info('%d link atom(s) added%s', len(self.la_idx),
-                    ', each bonded to its MM atom (funct 5)' if link_la_to_mm1 else '')
+                    ', funct-5 connections: ' + ' and '.join(made) if made else '')
+
+    def _add_connection(self, atom1, atom2):
+        """A funct-5 bond: no potential, but exclusions are generated from it."""
+        bond = pmd.Bond(atom1, atom2)
+        bond.funct = 5
+        self.qm_mol.bonds.append(bond)
+        return bond
 
     # ================================================== boundary charge schemes
     def _boundary_mm1_atoms(self):
@@ -1633,9 +1734,9 @@ class QM:
         Parameters
         ----------
         method : str
-            key of :data:`QMMMtools.data.QM_METHODS`; ``'dftb3-d4'`` reproduces the
-            original setup, ``'dftb3-d3h5'`` and ``'gfn2-xtb'`` are the other
-            common choices.  :func:`list_methods` prints them all.
+            key of :data:`QMMMtools.data.QM_METHODS`; ``'dftb3-d3h5'`` is the
+            default, ``'dftb3-d4'`` and ``'gfn2-xtb'`` are the other common
+            choices.  :func:`list_methods` prints them all.
         skpath : path-like
             directory with the Slater-Koster files (DFTB methods only).  Give the
             path as mdrun will see it -- a relative one is fine.
@@ -1643,9 +1744,11 @@ class QM:
             overrides the charge worked out by :meth:`job`.
         **kwargs
             passed on to :func:`write_hsd` / :func:`hamiltonian_block`:
-            ``sk_suffix``, ``sk_separator``, ``sk_lowercase``, ``scc_tolerance``,
-            ``max_scc_iterations``, ``mixer``, ``analysis``, ``options``, ``extra``.
-            Charged metal sites often need ``mixer='anderson'``.
+            ``dftbplus_version``, ``sk_suffix``, ``sk_separator``,
+            ``sk_lowercase``, ``scc_tolerance``, ``max_scc_iterations``,
+            ``mixer``, ``analysis``, ``options``, ``extra``.  Charged metal sites
+            often need ``mixer='anderson'``; DFTB+ 21.x-23.x needs
+            ``dftbplus_version=21``.
         """
         if charge is None:
             charge = self.aim_qm_charge
@@ -1719,7 +1822,7 @@ class QM:
 
     # ===================================================================== run
     def job(self, qm_aim_charge=None, mm_retention='no', redistr_scheme='no',
-            link_la_to_mm1=True, charge_rounding=None):
+            link_la_to_mm1=True, link_la_to_mm2=False, charge_rounding=None):
         """Build the QM/MM system and write the topology, coordinates and index file.
 
         Parameters
@@ -1737,9 +1840,10 @@ class QM:
         redistr_scheme : {'no', 'amber', 'RC', 'RCD', 'CS'}
             what happens to the charge of the MM boundary atoms, see
             :meth:`redistribute_boundary_charge`.
-        link_la_to_mm1 : bool
-            add a funct-5 bond between each link atom and its MM atom so that
-            grompp generates the exclusions around the link atom.
+        link_la_to_mm1, link_la_to_mm2 : bool
+            funct-5 connections from each link atom to its MM1 atom and to the
+            MM2 atoms behind it, so that grompp generates the exclusions around
+            the link atom.  The two work independently, see :meth:`vs2_and_LA`.
         """
         self.determine_qm()
         self.calculate_charge_qm()
@@ -1748,7 +1852,7 @@ class QM:
         self.find_qmmm_bonds()
         self.process_mm_terms(mm_retention)
         self.process_bonds()
-        self.vs2_and_LA(link_la_to_mm1=link_la_to_mm1)
+        self.vs2_and_LA(link_la_to_mm1=link_la_to_mm1, link_la_to_mm2=link_la_to_mm2)
         self.redistribute_boundary_charge(redistr_scheme)
         self.write_outputs()
         LOGGER.info('done: total charge of the written system %+.4f e', self.full_charge())

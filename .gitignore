@@ -12,6 +12,7 @@ dist/
 qm*.gro
 qm*.top
 qm*.ndx
+qm*.pdb
 dftb_in*.hsd
 dftb_pin.hsd
 dftb_in.out

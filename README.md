@@ -130,7 +130,7 @@ qm = QMMMtools.QM('npt.gro', 'topol.top', 'qm.gro', 'qm.top', 'qm.ndx')
 
 qm.choose_qm_to_extend('@21313,21391,21408')      # grow each seed to the breakable bonds
 qm.job()                                          # charge derived from the force field
-qm.make_hsd('dftb_in.hsd', method='dftb3-d4',
+qm.make_hsd('dftb_in.hsd', method='dftb3-d3h5',
             skpath='./3ob-3-1-ophyd/', mixer='anderson')
 qm.check_consistency('dftb_in.hsd')               # .ndx / .gro / .hsd must agree
 ```
@@ -160,8 +160,10 @@ On the command line the same thing is `-e`/`--extend`, `-s`/`--select` (both rep
 and `--solvate R`.
 
 Growth stops at the *directed* pairs in `qm.breakable_bonds`. `('CB', 'CA')` means
-"walking from an atom named CB onto one named CA is a cut", so a side chain stops at CB
-while a walk that starts on CA still reaches CB.
+"walking from an atom named CB onto one named CA is a cut". The protein table lists the
+CA–CB bond in both directions, so a side-chain selection stops at CB and a backbone
+selection stops at CA; the peptide cuts `N–CA`, `CA–C` and `C–CA` let a single peptide
+unit be taken on its own.
 
 ## Charge
 
@@ -194,13 +196,22 @@ nucleic-acid atoms (`qm.redistr_residues`) — never water and never ions.
 ## The QM/MM boundary
 
 Each QM–MM bond gets a hydrogen link atom, written as a two-body virtual site on the
-QM–MM axis at `H_dist` from the QM atom. With `link_la_to_mm1=True` (the default) a
-`funct 5` bond to the MM atom is added as well, so grompp generates the exclusions
-around it.
+QM–MM axis at `H_dist` from the QM atom.
 
 `H_dist` is the equilibrium X–H bond length of the **capped QM atom** — C 1.09 Å,
 N 1.01 Å, O 0.97 Å, S 1.34 Å. Anything else stretches or compresses a real bond inside
 the QM calculation.
+
+Two independent flags add `funct 5` bonds around the link atom — "connections" that carry
+no potential and exist only so that grompp generates exclusions from them:
+
+| flag | effect |
+|---|---|
+| `link_la_to_mm1=True` (default) | one bond to the MM atom the link atom caps; with `nrexcl = 3` this already excludes the link atom from everything within three bonds of MM1 |
+| `link_la_to_mm2=False` | one bond to each further MM neighbour of MM1, pushing the exclusion shell one bond further out |
+
+On the command line: `--no-link-bond` turns the first off, `--link-la-to-mm2` turns the
+second on. They can be combined in any way.
 
 What happens to the charge of the MM boundary atom is `redistr_scheme`
 (`--redistr-scheme`):
@@ -264,15 +275,41 @@ qmmmtools methods
 
 | method | notes |
 |---|---|
-| `dftb3-d4` | DFTB3/3ob + D4 + H damping — the default |
-| `dftb3-d3h5` | DFTB3/3ob + D3(zero) + H5 hydrogen-bond correction |
+| `dftb3-d3h5` | DFTB3/3ob + D3(zero) + H5 hydrogen-bond correction — the default |
+| `dftb3-d4` | DFTB3/3ob + D4 + H damping |
 | `dftb3-d3bj` | DFTB3/3ob + D3(BJ) + H damping |
 | `dftb3` | DFTB3/3ob, no dispersion |
 | `dftb2` | plain SCC-DFTB (mio), no third order |
 | `gfn2-xtb`, `gfn1-xtb` | via tblite, no Slater–Koster files |
 
-All of them were checked against DFTB+ 21.2, and GFN2-xTB was verified to run through the
-GROMACS interface.
+Every DFTB3 method uses the 3ob-3-1 set as its authors specify it: the maximum angular
+momenta and the Hubbard derivatives are the fifteen-element tables from the README that
+ships with the set, and the γ^h damping exponent is ζ = 4.00. The D4 parameters are the
+`dftb_3ob` two-body entry of `dftd4`; the D3(BJ) ones (a1 = 0.746, a2 = 4.191, s8 = 3.209)
+are those published with 3ob itself. `dftb3-d3h5` replaces the γ^h damping with the H5
+correction and adds D3 with zero damping and H–H repulsion, which is the recipe the DFTB+
+manual gives for DFTB3-D3H5.
+
+GFN2-xTB was verified to run through the GROMACS interface.
+
+### DFTB+ release
+
+DFTB+ 24.1 renamed the `Analysis` switch that returns the forces from `CalculateForces` to
+`PrintForces`, and the old spelling is not accepted as an alias. `dftbplus_version`
+(`--dftbplus-version`) picks the dialect:
+
+```python
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH)                        # 25.1 -> PrintForces
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH, dftbplus_version=21)   # 21.x -> CalculateForces
+```
+
+The default is 25.1, a bare year means the `.1` release of that series, and anything older
+than 21 is refused. Nothing else this module writes differs between 21.x and 25.x, so an
+existing input moves between the two by rewriting that one keyword:
+
+```bash
+qmmmtools rewrite-hsd dftb_in.hsd --dftbplus-version 21
+```
 
 ### Updating an existing `dftb_in.hsd`
 
@@ -420,6 +457,15 @@ converts to `funct 5`; if you see this, check that nothing else edited the topol
 **`cannot tell the element of atom …`.** ParmEd found no atomic number, i.e. the `at.num`
 column of `[ atomtypes ]` is missing for that type. Fix the force field, or add the type
 to `data.TYPE2ELEMENT`.
+
+**DFTB+ halts on `dftb_in.hsd` without saying much.** Usually a dialect mismatch: a 21.x–23.x
+binary reading `PrintForces`, or a 24.1+ binary reading `CalculateForces`. Point
+`--dftbplus-version` at the release you actually run.
+
+**`no DFTB angular momentum known for [...]` or `no Hubbard derivative known for [...]`.**
+The element is outside 3ob-3-1, which covers only Br, C, Ca, Cl, F, H, I, K, Mg, N, Na, O,
+P, S and Zn. Use a Slater–Koster set that has it and add the element to
+`data.MAX_ANGULAR_MOMENTUM` / `data.HUBBARD_DERIVS` with that set's own values.
 
 **`[ molecules ] accounts for N atoms but the structure has M`.** The topology and the
 coordinate file do not describe the same system.

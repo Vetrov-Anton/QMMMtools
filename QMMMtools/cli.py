@@ -15,7 +15,8 @@ import sys
 from pathlib import Path
 
 from . import data
-from .core import (DEFAULT_CHARGE_ROUNDING, LOGGER, QM, QMMMError, HsdFile,
+from .data import DEFAULT_QM_METHOD
+from .core import (DEFAULT_CHARGE_ROUNDING, DEFAULT_DFTBPLUS_VERSION, LOGGER, QM, QMMMError, HsdFile,
                    _read_geometry_types, _rounding_threshold, get_method, list_methods,
                    read_index_file, read_qm_geometry, rewrite_hsd, set_log_level)
 
@@ -38,8 +39,8 @@ BOND_PRESETS = {
 def _add_hsd_options(parser, with_method_default=False):
     """Options shared by ``prepare`` and ``rewrite-hsd``."""
     group = parser.add_argument_group('QM method')
-    group.add_argument('--method', default='dftb3-d4' if with_method_default else None,
-                       help='QM method (see "qmmmtools methods")')
+    group.add_argument('--method', default=DEFAULT_QM_METHOD if with_method_default else None,
+                       help=f'QM method, default {DEFAULT_QM_METHOD} (see "qmmmtools methods")')
     group.add_argument('--skpath', help='directory with the Slater-Koster files, as mdrun '
                                         'will see it (DFTB methods only)')
     group.add_argument('--sk-suffix', default='-c.spl', help='Slater-Koster file suffix')
@@ -48,6 +49,10 @@ def _add_hsd_options(parser, with_method_default=False):
                        help='maximum number of SCC iterations')
     group.add_argument('--mixer', help='"anderson" (recommended for charged metal sites), '
                                        '"broyden", or a raw HSD block')
+    group.add_argument('--dftbplus-version', metavar='V',
+                       help='DFTB+ release the input is written for: 24.1 and later spell '
+                            'the Analysis switch "PrintForces", 21.x-23.x "CalculateForces" '
+                            f'(default {DEFAULT_DFTBPLUS_VERSION})')
 
 
 def build_parser():
@@ -103,7 +108,10 @@ def build_parser():
                        choices=('no', 'amber', 'RC', 'RCD', 'CS'),
                        help='what happens to the charge of the MM boundary atoms')
     setup.add_argument('--no-link-bond', action='store_true',
-                       help='do not bond the link atoms to their MM atom (funct 5)')
+                       help='do not connect the link atoms to their MM1 atom (funct 5)')
+    setup.add_argument('--link-la-to-mm2', action='store_true',
+                       help='also connect each link atom to the MM2 atoms behind its MM1 '
+                            'atom (funct 5), widening the exclusion shell')
     setup.add_argument('--preset', action='append', choices=sorted(BOND_PRESETS), default=[],
                        help='breakable-bond table to use; repeatable, default protein')
     setup.add_argument('--breakable', action='append', default=[], metavar='QM:MM[:DIST]',
@@ -188,7 +196,8 @@ def _hsd_kwargs(args):
     """The hsd options the user actually gave, so defaults are not forced on a rewrite."""
     mapping = {'skpath': args.skpath, 'sk_suffix': getattr(args, 'sk_suffix', None),
                'scc_tolerance': args.scc_tolerance, 'mixer': args.mixer,
-               'max_scc_iterations': args.max_scc_iterations}
+               'max_scc_iterations': args.max_scc_iterations,
+               'dftbplus_version': args.dftbplus_version}
     return {key: value for key, value in mapping.items() if value is not None}
 
 
@@ -214,7 +223,7 @@ def cmd_prepare(args):
 
     qm.job(qm_aim_charge=args.charge, mm_retention=args.mm_retention,
            redistr_scheme=args.redistr_scheme, link_la_to_mm1=not args.no_link_bond,
-           charge_rounding=args.charge_rounding)
+           link_la_to_mm2=args.link_la_to_mm2, charge_rounding=args.charge_rounding)
 
     hsd = None
     if args.hsd is not None:

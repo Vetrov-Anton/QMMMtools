@@ -86,9 +86,11 @@ POLYMER_RESIDUES = AMINO_ACIDS | NUCLEIC_ACIDS
 # the QM calculation and shows up directly in the QM energy and forces.
 
 #: backbone cuts of a protein: side chain only (CB-CA) or a peptide unit
-PROTEIN_BREAKABLE_BONDS = {('CB', 'CA'), ('N', 'CA'), ('CA', 'C'), ('C', 'CA')}
+PROTEIN_BREAKABLE_BONDS = {('CB', 'CA'), ('CA', 'CB'), ('N', 'CA'),
+                           ('CA', 'C'), ('C', 'CA')}
 PROTEIN_H_DIST = {
     ('CB', 'CA'): 1.09,   # C(sp3)-H, caps the side-chain CB
+    ('CA', 'CB'): 1.09,   # C(sp3)-H, caps the alpha carbon (backbone kept quantum)
     ('N', 'CA'): 1.01,    # N-H, caps the amide nitrogen
     ('CA', 'C'): 1.09,    # C(sp3)-H, caps the alpha carbon
     ('C', 'CA'): 1.09,    # C(sp2)-H, caps the carbonyl carbon
@@ -216,14 +218,28 @@ def guess_element(atom_name, residue_name=''):
 # QM methods
 # ---------------------------------------------------------------------------
 
-#: DFTB angular momenta of the 3ob / mio parameter sets
-MAX_ANGULAR_MOMENTUM = {
-    'H': 's', 'C': 'p', 'N': 'p', 'O': 'p', 'F': 'p', 'Na': 'p', 'Mg': 'p',
-    'P': 'd', 'S': 'd', 'Cl': 'd', 'K': 'p', 'Ca': 'p', 'Br': 'd', 'I': 'd',
-    'Zn': 'd', 'Fe': 'd', 'Cu': 'd', 'Li': 'p', 'Rb': 'p', 'Cs': 'p',
+#: Maximum angular momenta of the 3ob-3-1 set, verbatim from the README that
+#: ships with it.  These fifteen elements are the whole of 3ob: anything else
+#: needs a different Slater-Koster set.
+MAX_ANGULAR_MOMENTUM_3OB = {
+    'Br': 'd', 'C': 'p', 'Ca': 'p', 'Cl': 'd', 'F': 'p', 'H': 's', 'I': 'd',
+    'K': 'p', 'Mg': 'p', 'N': 'p', 'Na': 'p', 'O': 'p', 'P': 'd', 'S': 'd',
+    'Zn': 'd',
 }
 
-#: DFTB3 Hubbard derivatives of the 3ob parameter set
+#: Elements that 3ob does not cover, for use with other Slater-Koster sets
+#: (mio, matsci, trans3d, ...).  Writing one of these with skpath pointing at
+#: 3ob produces an input DFTB+ rejects, because the SK file does not exist.
+MAX_ANGULAR_MOMENTUM_OTHER = {
+    'Fe': 'd', 'Cu': 'd', 'Ti': 'd', 'Ni': 'd', 'Co': 'd', 'Mn': 'd',
+    'Li': 'p', 'Rb': 'p', 'Cs': 'p', 'Si': 'p', 'Al': 'p', 'B': 'p',
+}
+
+MAX_ANGULAR_MOMENTUM = {**MAX_ANGULAR_MOMENTUM_3OB, **MAX_ANGULAR_MOMENTUM_OTHER}
+
+#: DFTB3 Hubbard derivatives (atomic units) of the 3ob-3-1 set, verbatim from
+#: its README.  A DFTB3 method refuses to write an element that is missing here,
+#: because a wrong derivative is worse than no calculation.
 HUBBARD_DERIVS = {
     'Br': -0.0573, 'C': -0.1492, 'Ca': -0.0340, 'Cl': -0.0697, 'F': -0.1623,
     'H': -0.1857, 'I': -0.0433, 'K': -0.0339, 'Mg': -0.0200, 'N': -0.1535,
@@ -284,17 +300,21 @@ _D3_ZERO_H5 = """Dispersion = DftD3 {
       HHRepulsion = Yes
     }"""
 
+# DFTB3-D3(BJ) parameters as published with 3ob-3-1 (README of the set,
+# J. Chem. Theory Comput. 2015, 11, 332): a1 = 0.746, a2 = 4.191, s8 = 3.209
 _D3_BJ = """Dispersion = DftD3 {
       Damping = BeckeJohnson {
-        a1 = 0.5719
-        a2 = 3.6017
+        a1 = 0.746
+        a2 = 4.191
       }
       s6 = 1.0
-      s8 = 0.5883
+      s8 = 3.209
     }"""
 
+# zeta of the gamma^h function.  The 3ob-3-1 README prescribes 4.00 for every
+# DFTB3/3OB calculation; 4.05 in the DFTB+ manual is only an illustration.
 _H_DAMPING = """HCorrection = Damping {
-      Exponent = 4.05
+      Exponent = 4.00
     }"""
 
 _H5 = "HCorrection = H5 {}"
@@ -303,10 +323,11 @@ _H5 = "HCorrection = H5 {}"
 #: gmx+DFTB+ container) -- each one runs a single point without complaint.
 QM_METHODS = {
     'dftb3-d4': QMMethod(
-        'dftb3-d4', 'dftb', 'DFTB3/3ob with D4 dispersion and H damping (default)',
+        'dftb3-d4', 'dftb', 'DFTB3/3ob with D4 dispersion and H damping',
         third_order=True, hcorrection=_H_DAMPING, dispersion=_D4_3OB),
     'dftb3-d3h5': QMMethod(
-        'dftb3-d3h5', 'dftb', 'DFTB3/3ob with D3(zero) dispersion and the H5 hydrogen-bond correction',
+        'dftb3-d3h5', 'dftb',
+        'DFTB3/3ob with D3(zero) dispersion and the H5 hydrogen-bond correction (default)',
         third_order=True, hcorrection=_H5, dispersion=_D3_ZERO_H5),
     'dftb3-d3bj': QMMethod(
         'dftb3-d3bj', 'dftb', 'DFTB3/3ob with D3(BJ) dispersion and H damping',
@@ -324,4 +345,4 @@ QM_METHODS = {
         xtb_method='GFN1-xTB'),
 }
 
-DEFAULT_QM_METHOD = 'dftb3-d4'
+DEFAULT_QM_METHOD = 'dftb3-d3h5'
