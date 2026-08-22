@@ -21,17 +21,19 @@ from . import data
 from .core import (QM, QMGeometry, QMMMError, HsdFile, set_log_level, LOGGER,
                    read_qm_geometry, read_index_file, write_hsd, rewrite_hsd,
                    hamiltonian_block, list_methods, get_method,
+                   write_gro, gro_box_line, convert_to_gro,
                    analysis_block, forces_keyword, parse_dftbplus_version,
                    ANALYSIS_BLOCK, OPTIONS_BLOCK, DEFAULT_DFTBPLUS_VERSION)
 from .data import QMMethod, QM_METHODS, DEFAULT_QM_METHOD
 
-__version__ = '1.1.0'
+__version__ = '1.2.0'
 
 __all__ = [
     'QM', 'QMGeometry', 'QMMMError', 'HsdFile', 'QMMethod',
     'set_log_level', 'LOGGER',
     'read_qm_geometry', 'read_index_file',
     'write_hsd', 'rewrite_hsd', 'hamiltonian_block',
+    'write_gro', 'gro_box_line', 'convert_to_gro',
     'list_methods', 'get_method',
     'analysis_block', 'forces_keyword', 'parse_dftbplus_version',
     'ANALYSIS_BLOCK', 'OPTIONS_BLOCK', 'DEFAULT_DFTBPLUS_VERSION',

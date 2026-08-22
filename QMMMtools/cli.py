@@ -128,8 +128,16 @@ def build_parser():
                                          'that is not addressed stays byte for byte, so '
                                          'hand-tuned settings survive.')
     rewrite.add_argument('hsd', help='file to update')
-    rewrite.add_argument('-c', '--gro', help='coordinates to take the new geometry from')
+    rewrite.add_argument('-c', '--gro', metavar='FILE',
+                         help='coordinates to take the new geometry from; a .pdb is read '
+                              'just as well as a .gro')
     rewrite.add_argument('-n', '--ndx', help='index file holding the QM group')
+    rewrite.add_argument('--out-gro', metavar='FILE',
+                         help='also write the whole input system as a .gro, every atom in '
+                              'the input order. A .pdb input is converted under its own '
+                              'name by default; --no-out-gro switches that off')
+    rewrite.add_argument('--no-out-gro', action='store_true',
+                         help='do not write a .gro even when the input is a .pdb')
     rewrite.add_argument('--group', default='QM', help='index group to use (default: QM)')
     rewrite.add_argument('--source', help='read from this file and write to HSD instead')
     rewrite.add_argument('--charge', type=int, help='new total charge of the QM region')
@@ -247,12 +255,18 @@ def cmd_rewrite_hsd(args):
         raise QMMMError('--gro and --ndx go together: both are needed for a new geometry')
     geometry = None
     if args.gro:
-        geometry = read_qm_geometry(args.gro, args.ndx, group=args.group)
+        write_gro_to = False if args.no_out_gro else args.out_gro
+        geometry = read_qm_geometry(args.gro, args.ndx, group=args.group,
+                                    write_gro_to=write_gro_to)
+    elif args.out_gro:
+        raise QMMMError('--out-gro needs an input to convert: give -c/--gro as well')
     kwargs = _hsd_kwargs(args)
     kwargs.pop('sk_suffix', None) if args.method is None else None
     rewrite_hsd(args.hsd, geometry=geometry, source_hsd=args.source,
                 keep_types=not args.no_keep_types, method=args.method,
                 charge=args.charge, **kwargs)
+    if geometry is not None and geometry.gro_path is not None:
+        print(f'coordinates written to {geometry.gro_path}')
     return 0
 
 

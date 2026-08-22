@@ -169,6 +169,8 @@ class QMGeometry:
         self.coordinates = np.asarray(coordinates, dtype=float).reshape(-1, 3)
         self.elements = list(elements) if elements is not None else None
         self.labels = list(labels) if labels is not None else None
+        self.source = None      # the coordinate file this came from, if any
+        self.gro_path = None    # the .gro written alongside it, if any
         if self.elements is not None and len(self.elements) != len(self.coordinates):
             raise QMMMError('elements and coordinates have different lengths')
 
@@ -651,18 +653,30 @@ def _read_geometry_types(hsd):
     return types, (species or None)
 
 
-def read_qm_geometry(file_gro, file_ndx, group='QM', elements=None, warn_unknown=True):
+def read_qm_geometry(file_gro, file_ndx, group='QM', elements=None, warn_unknown=True,
+                     write_gro_to=None):
     """Read the QM atoms straight from a coordinate file and an index file.
 
     This is the "I only have ``qm.gro`` and ``qm.ndx``" entry point: no topology
-    is needed, so it also works for files somebody else produced.
+    is needed, so it also works for files somebody else produced.  Any format
+    ParmEd reads is accepted -- a ``.pdb`` just as well as a ``.gro``.
 
-    Because a ``.gro`` carries no atomic numbers the elements are guessed from
-    the atom and residue names (see :func:`QMMMtools.data.guess_element`).  Pass
-    ``elements`` to override, or leave the guessing to :func:`rewrite_hsd`, which
-    prefers the ``TypeNames`` already present in the file it rewrites.
+    Because a coordinate file carries no atomic numbers the elements are guessed
+    from the atom and residue names (see :func:`QMMMtools.data.guess_element`).
+    Pass ``elements`` to override, or leave the guessing to :func:`rewrite_hsd`,
+    which prefers the ``TypeNames`` already present in the file it rewrites.
 
-    Any format ParmEd can read works, not just ``.gro``.
+    ``write_gro_to`` also writes the *whole* input system out as a ``.gro``, every
+    atom in the input's own order, so the index file stays valid across the
+    conversion:
+
+    ``None`` (default)
+        convert when the input is not already a ``.gro``, next to it and under
+        the same name -- ``sys.pdb`` gives ``sys.gro``;
+    a path
+        convert and write there;
+    ``False``
+        never convert.
     """
     file_gro, file_ndx = Path(file_gro).expanduser(), Path(file_ndx).expanduser()
     for path in (file_gro, file_ndx):
@@ -686,6 +700,21 @@ def read_qm_geometry(file_gro, file_ndx, group='QM', elements=None, warn_unknown
     atoms = [frame.atoms[i - 1] for i in indexes]
     coordinates = np.array([[a.xx, a.xy, a.xz] for a in atoms])   # ParmEd works in Angstrom
     labels = [f'{a.residue.name}{a.residue.number}:{a.name}' for a in atoms]
+
+    gro_path = None
+    if write_gro_to is not False:
+        wanted = write_gro_to or (None if file_gro.suffix.lower() == '.gro'
+                                  else file_gro.with_suffix('.gro'))
+        if wanted is not None:
+            velocities = getattr(frame, 'velocities', None)
+            if velocities is not None:
+                velocities = np.asarray(velocities).reshape(-1, 3)
+            gro_path = write_gro(frame.atoms, wanted, box=getattr(frame, 'box', None),
+                                 velocities=velocities,
+                                 title=f'Converted from {file_gro.name} by QMMMtools: '
+                                       f'{natoms} atoms')
+            LOGGER.info('wrote %s (%d atoms, same order as %s%s)', gro_path, natoms,
+                        file_gro.name, ', velocities kept' if velocities is not None else '')
     if elements is None:
         elements = [data.guess_element(a.name, a.residue.name) for a in atoms]
         unknown = [labels[i] for i, e in enumerate(elements) if e is None]
@@ -705,7 +734,98 @@ def read_qm_geometry(file_gro, file_ndx, group='QM', elements=None, warn_unknown
     elif len(elements) != len(atoms):
         raise QMMMError(f'{len(elements)} elements given for {len(atoms)} atoms')
     LOGGER.info('read %d atoms of [ %s ] from %s', len(atoms), group, file_gro.name)
-    return QMGeometry(coordinates, elements, labels)
+    geometry = QMGeometry(coordinates, elements, labels)
+    geometry.source = file_gro
+    geometry.gro_path = gro_path
+    return geometry
+
+
+def gro_box_line(box, atoms=None):
+    """The Gromacs box line; a triclinic box is written in the nine-number form.
+
+    Without a box a bounding one with 0.5 nm padding is written, because a .gro
+    has to carry a box line and grompp refuses a file without it.
+    """
+    if box is None:
+        if not atoms:
+            raise QMMMError('no box and no atoms to derive one from')
+        crd = np.array([[a.xx, a.xy, a.xz] for a in atoms])
+        diff = (crd.max(axis=0) - crd.min(axis=0)) / 10 + 0.5
+        LOGGER.warning('the input carries no box; writing a bounding box with 0.5 nm padding '
+                       '-- replace it with the real one before running grompp')
+        return f'{diff[0]:10.5f}{diff[1]:10.5f}{diff[2]:10.5f}\n'
+    a, b, c = reduce_box_vectors(*box_lengths_and_angles_to_vectors(*box))
+    if all(abs(x - 90) < 1e-5 for x in box[3:]):
+        return f'{a[0] / 10:10.5f}{b[1] / 10:10.5f}{c[2] / 10:10.5f}\n'
+    return (f'{a[0] / 10:10.5f}{b[1] / 10:10.5f}{c[2] / 10:10.5f}'
+            f'{a[1] / 10:10.5f}{a[2] / 10:10.5f}{b[0] / 10:10.5f}'
+            f'{b[2] / 10:10.5f}{c[0] / 10:10.5f}{c[1] / 10:10.5f}\n')
+
+
+def write_gro(atoms, file_gro, box=None, velocities=None, title=None, residue_numbers=None):
+    """Write a Gromacs ``.gro`` with the atoms exactly in the order given.
+
+    Written by hand rather than through ParmEd: ``Structure.save`` reorders the
+    atoms per molecule unless ``combine='all'`` is passed, which silently breaks
+    the correspondence with a topology and an index file.
+
+    ``atoms`` are ParmEd atoms with coordinates in Angstrom, ``velocities`` an
+    ``(natoms, 3)`` array in Angstrom/ps or None, ``residue_numbers`` one number
+    per atom (by default the residue index within the structure).
+    """
+    atoms = list(atoms)
+    if not atoms:
+        raise QMMMError('nothing to write: the atom list is empty')
+    if residue_numbers is None:
+        residue_numbers = [atom.residue.idx + 1 for atom in atoms]
+    path = Path(file_gro).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w') as handle:
+        handle.write((title or f'Written by QMMMtools: {len(atoms)} atoms') + '\n')
+        handle.write(f'{len(atoms):5d}\n')
+        for n, (atom, resid) in enumerate(zip(atoms, residue_numbers)):
+            handle.write(f'{resid % 100000:5d}{atom.residue.name[:5]:<5s}{atom.name[:5]:>5s}'
+                         f'{(n + 1) % 100000:5d}'
+                         f'{atom.xx / 10:8.3f}{atom.xy / 10:8.3f}{atom.xz / 10:8.3f}')
+            if velocities is not None:
+                v = velocities[n]
+                handle.write(f'{v[0] / 10:8.4f}{v[1] / 10:8.4f}{v[2] / 10:8.4f}')
+            handle.write('\n')
+        handle.write(gro_box_line(box, atoms))
+    return path
+
+
+def convert_to_gro(coordinate_file, file_gro=None):
+    """Convert any coordinate file ParmEd reads into a ``.gro``, atom order intact.
+
+    ``file_gro`` defaults to the input path with a ``.gro`` suffix, so
+    ``sys.pdb`` becomes ``sys.gro``.  Every atom of the input is written, in the
+    input's own order, which is what keeps an index file valid across the
+    conversion.
+    """
+    source = Path(coordinate_file).expanduser()
+    if not source.is_file():
+        raise QMMMError(f'input file not found: {source}')
+    target = Path(file_gro).expanduser() if file_gro else source.with_suffix('.gro')
+    if target.resolve() == source.resolve():
+        raise QMMMError(f'{source} would be overwritten by its own conversion; '
+                        'give a different output name')
+    try:
+        frame = pmd.load_file(str(source), skip_bonds=True)
+    except Exception as exc:
+        raise QMMMError(f'could not read {source}: {exc}') from exc
+    if getattr(frame, 'coordinates', None) is None:
+        raise QMMMError(f'{source} carries no coordinates')
+    velocities = getattr(frame, 'velocities', None)
+    if velocities is not None:
+        velocities = np.asarray(velocities).reshape(-1, 3)
+    path = write_gro(frame.atoms, target, box=getattr(frame, 'box', None),
+                     velocities=velocities,
+                     title=f'Converted from {source.name} by QMMMtools: '
+                           f'{len(frame.atoms)} atoms')
+    LOGGER.info('converted %s -> %s (%d atoms, order unchanged%s)', source.name, path,
+                len(frame.atoms), ', velocities kept' if velocities is not None else '')
+    return path
 
 
 def read_index_file(path):
@@ -1654,21 +1774,12 @@ class QM:
         atoms = list(self.qm_mol.atoms) + list(self.rest.atoms)
         n_qm_mol, n_qm_res = len(self.qm_mol.atoms), len(self.qm_mol.residues)
         velocities = self._output_velocities(len(atoms))
-        with open(self.file_ogro, 'w') as handle:
-            handle.write(f'QM/MM system prepared by QMMMtools: '
-                         f'{len(self.qm_group_idx)} QM atoms\n')
-            handle.write(f'{len(atoms):5d}\n')
-            for n, atom in enumerate(atoms):
-                res = atom.residue
-                resid = res.idx + 1 if n < n_qm_mol else res.idx + 1 + n_qm_res
-                handle.write(f'{resid % 100000:5d}{res.name[:5]:<5s}{atom.name[:5]:>5s}'
-                             f'{(n + 1) % 100000:5d}'
-                             f'{atom.xx / 10:8.3f}{atom.xy / 10:8.3f}{atom.xz / 10:8.3f}')
-                if velocities is not None:
-                    v = velocities[n]
-                    handle.write(f'{v[0] / 10:8.4f}{v[1] / 10:8.4f}{v[2] / 10:8.4f}')
-                handle.write('\n')
-            handle.write(self._box_line(atoms))
+        # the untouched rest keeps its own residue numbering, shifted past the QM block
+        residue_numbers = [atom.residue.idx + 1 if n < n_qm_mol else atom.residue.idx + 1 + n_qm_res
+                           for n, atom in enumerate(atoms)]
+        write_gro(atoms, self.file_ogro, box=self.itop.box, velocities=velocities,
+                  residue_numbers=residue_numbers,
+                  title=f'QM/MM system prepared by QMMMtools: {len(self.qm_group_idx)} QM atoms')
         LOGGER.info('wrote %s (%d atoms%s)', self.file_ogro, len(atoms),
                     ', velocities kept' if velocities is not None else ', no velocities')
 
@@ -1684,19 +1795,8 @@ class QM:
         ])[:n_out]
 
     def _box_line(self, atoms):
-        """The Gromacs box line, triclinic when the input box is."""
-        box = self.itop.box
-        if box is None:
-            crd = np.array([[a.xx, a.xy, a.xz] for a in atoms])
-            diff = (crd.max(axis=0) - crd.min(axis=0)) / 10 + 0.5
-            LOGGER.warning('the input has no box; writing a bounding box with 0.5 nm padding')
-            return f'{diff[0]:10.5f}{diff[1]:10.5f}{diff[2]:10.5f}\n'
-        a, b, c = reduce_box_vectors(*box_lengths_and_angles_to_vectors(*box))
-        if all(abs(x - 90) < 1e-5 for x in box[3:]):
-            return f'{a[0] / 10:10.5f}{b[1] / 10:10.5f}{c[2] / 10:10.5f}\n'
-        return (f'{a[0] / 10:10.5f}{b[1] / 10:10.5f}{c[2] / 10:10.5f}'
-                f'{a[1] / 10:10.5f}{a[2] / 10:10.5f}{b[0] / 10:10.5f}'
-                f'{b[2] / 10:10.5f}{c[0] / 10:10.5f}{c[1] / 10:10.5f}\n')
+        """The Gromacs box line of this system."""
+        return gro_box_line(self.itop.box, atoms)
 
     # ============================================================ DFTB+ / xTB
     def _element_of(self, atom):

@@ -327,16 +327,39 @@ qm.rewrite_hsd('dftb_in.hsd', geometry=False, scc_tolerance='1e-7')  # settings 
 ### …without a topology
 
 Only a coordinate file and an index file are needed, so a `.hsd` can be refreshed even
-for files somebody else produced:
+for files somebody else produced. Any format ParmEd reads is accepted — a `.pdb` just as
+well as a `.gro`:
 
 ```bash
-qmmmtools rewrite-hsd dftb_in.hsd -c qm.gro -n qm.ndx --charge -2 --mixer anderson
+qmmmtools rewrite-hsd dftb_in.hsd -c qm.gro  -n qm.ndx --charge -2 --mixer anderson
+qmmmtools rewrite-hsd dftb_in.hsd -c sys.pdb -n qm.ndx --charge -2
 ```
 
 ```python
 geometry = QMMMtools.read_qm_geometry('qm.gro', 'qm.ndx', group='QM')
 QMMMtools.rewrite_hsd('dftb_in.hsd', geometry=geometry, skpath='/new/path/')
 ```
+
+A `.pdb` input is also written out as a `.gro` — the **whole** system, every atom in the
+input's own order, so the index file and the topology stay valid across the conversion.
+By default it lands next to the input under the same name (`sys.pdb` → `sys.gro`):
+
+| | command line | Python |
+|---|---|---|
+| default for a `.pdb` | — | `write_gro_to=None` |
+| pick the name | `--out-gro other.gro` | `write_gro_to='other.gro'` |
+| do not write one | `--no-out-gro` | `write_gro_to=False` |
+
+A `.gro` input is left alone, since there is nothing to convert. The conversion is also
+available on its own:
+
+```python
+QMMMtools.convert_to_gro('sys.pdb')                 # -> sys.gro
+QMMMtools.convert_to_gro('sys.pdb', 'other.gro')
+```
+
+Coordinates survive the round trip to the 0.001 nm a `.gro` stores, and the box comes from
+the `CRYST1` record; a file without one gets a bounding box and a warning.
 
 Elements are taken from the `TypeNames` of the file being rewritten whenever the atom
 count matches; otherwise they are guessed from the atom and residue names (`CA` in `ALA`
