@@ -26,7 +26,7 @@ from .core import (QM, QMGeometry, QMMMError, HsdFile, set_log_level, LOGGER,
                    ANALYSIS_BLOCK, OPTIONS_BLOCK, DEFAULT_DFTBPLUS_VERSION)
 from .data import QMMethod, QM_METHODS, DEFAULT_QM_METHOD
 
-__version__ = '1.2.0'
+__version__ = '1.3.0'
 
 __all__ = [
     'QM', 'QMGeometry', 'QMMMError', 'HsdFile', 'QMMethod',

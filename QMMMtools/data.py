@@ -72,6 +72,69 @@ POLYMER_RESIDUES = AMINO_ACIDS | NUCLEIC_ACIDS
 
 
 # ---------------------------------------------------------------------------
+# ready-made selection masks
+# ---------------------------------------------------------------------------
+# Amber masks that come up in almost every QM/MM setup, so they do not have to
+# be typed out by hand.  They are plain strings and compose with everything
+# else: `f'({PROTEIN_SIDECHAIN_MASK})&(:HIS)'`, `f'({qm.qm_input_mask})|({...})'`.
+
+
+def atom_mask(names):
+    """``{'CA', 'CB'}`` -> ``'@CA,CB'``, the Amber mask that selects them by name."""
+    return '@' + ','.join(sorted(names))
+
+
+def residue_mask(names):
+    """``{'ALA', 'GLY'}`` -> ``':ALA,GLY'``, the Amber mask for those residues."""
+    return ':' + ','.join(sorted(names))
+
+
+#: Backbone atom names of an amino acid, in the Gromacs (HA1/HA2, OC1/OC2),
+#: Amber (HA2/HA3, OXT) and CHARMM (HN, OT1/OT2) spellings.  Everything else in
+#: an amino acid is side chain, which is why only this side is enumerated.
+PROTEIN_BACKBONE_ATOMS = frozenset({
+    'N', 'H', 'HN', 'H1', 'H2', 'H3',          # amide / N-terminal hydrogens
+    'CA', 'HA', 'HA1', 'HA2', 'HA3',           # alpha carbon and its hydrogens
+    'C', 'O',                                  # carbonyl
+    'OXT', 'OC1', 'OC2', 'OT1', 'OT2', 'O1', 'O2',   # C-terminal carboxylate
+})
+
+#: Sugar-phosphate backbone of a nucleotide; everything else is the base.
+NUCLEIC_BACKBONE_ATOMS = frozenset({
+    'P', 'OP1', 'OP2', 'OP3', 'O1P', 'O2P', 'O3P',
+    "O5'", "C5'", "H5'", "H5''", "H5'1", "H5'2",
+    "C4'", "H4'", "O4'",
+    "C3'", "H3'", "O3'",
+    "C2'", "H2'", "H2''", "H2'1", "H2'2", "O2'", "HO2'", "H2'2",
+    "C1'", "H1'",
+    'H5T', "HO5'", 'H3T', "HO3'",              # 5'/3' terminal hydrogens
+})
+
+#: ``':ALA,ARG,...'`` -- every residue name the module treats as an amino acid
+AMINO_ACID_MASK = residue_mask(AMINO_ACIDS)
+#: ``':DA,DC,...'`` -- every residue name the module treats as a nucleotide
+NUCLEIC_ACID_MASK = residue_mask(NUCLEIC_ACIDS)
+
+#: the backbone / sugar-phosphate names on their own, unrestricted by residue
+PROTEIN_BACKBONE_ATOM_MASK = atom_mask(PROTEIN_BACKBONE_ATOMS)
+NUCLEIC_BACKBONE_ATOM_MASK = atom_mask(NUCLEIC_BACKBONE_ATOMS)
+
+#: side chains of the amino acids -- the residue part matters, because a bare
+#: negation of the backbone names would take in water, ions and every ligand
+PROTEIN_SIDECHAIN_MASK = f'({AMINO_ACID_MASK})&(!{PROTEIN_BACKBONE_ATOM_MASK})'
+#: backbone of the amino acids
+PROTEIN_BACKBONE_MASK = f'({AMINO_ACID_MASK})&({PROTEIN_BACKBONE_ATOM_MASK})'
+#: everything that is not an amino-acid side chain: backbone, solvent, ligands
+NOT_PROTEIN_SIDECHAIN_MASK = f'!({PROTEIN_SIDECHAIN_MASK})'
+
+#: bases of the nucleotides, and the sugar-phosphate backbone
+NUCLEIC_BASE_MASK = f'({NUCLEIC_ACID_MASK})&(!{NUCLEIC_BACKBONE_ATOM_MASK})'
+NUCLEIC_BACKBONE_MASK = f'({NUCLEIC_ACID_MASK})&({NUCLEIC_BACKBONE_ATOM_MASK})'
+#: everything that is not a nucleobase
+NOT_NUCLEIC_BASE_MASK = f'!({NUCLEIC_BASE_MASK})'
+
+
+# ---------------------------------------------------------------------------
 # link atoms
 # ---------------------------------------------------------------------------
 # ``breakable_bonds`` is a set of *directed* (QM atom name, MM atom name) pairs.

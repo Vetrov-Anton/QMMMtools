@@ -159,6 +159,41 @@ qm.choose_qm_manually(f'(({qm.qm_input_mask})<:3.0)&(:SOL)')   # + every water w
 On the command line the same thing is `-e`/`--extend`, `-s`/`--select` (both repeatable)
 and `--solvate R`.
 
+### Ready-made masks
+
+`QMMMtools.data` carries the masks that come up in almost every setup, so they do not have
+to be typed out:
+
+```python
+from QMMMtools import data
+
+qm.choose_qm_manually(f'({data.PROTEIN_SIDECHAIN_MASK})&(:HIS)')       # side chains of every His
+qm.choose_qm_manually(f'({data.PROTEIN_SIDECHAIN_MASK})&(:ARG,LYS)')   # of Arg and Lys
+qm.choose_qm_to_extend(f'({data.PROTEIN_BACKBONE_MASK})&(:167-169)')   # a stretch of backbone
+```
+
+| mask | selects |
+|---|---|
+| `PROTEIN_SIDECHAIN_MASK` | side chains of the amino acids |
+| `NOT_PROTEIN_SIDECHAIN_MASK` | its negation: backbone, solvent, ions, ligands |
+| `PROTEIN_BACKBONE_MASK` | backbone of the amino acids |
+| `PROTEIN_BACKBONE_ATOM_MASK` | just the names, `@C,CA,H,...`, unrestricted by residue |
+| `NUCLEIC_BASE_MASK`, `NUCLEIC_BACKBONE_MASK`, `NOT_NUCLEIC_BASE_MASK` | the same split for nucleotides: base against sugar-phosphate |
+| `AMINO_ACID_MASK`, `NUCLEIC_ACID_MASK` | `:ALA,ARG,…` and `:DA,DC,…` |
+
+Only the **backbone** is enumerated by name — twenty names covering the Gromacs
+(`HA1/HA2`, `OC1/OC2`), Amber (`HA2/HA3`, `OXT`) and CHARMM (`HN`, `OT1/OT2`) spellings —
+and the side chain is its negation, so the list never has to grow with the residue types.
+The side-chain masks are restricted to amino-acid residues on purpose: a bare
+`!@N,CA,C,O,…` would take in every water molecule and every ligand.
+
+Build your own the same way:
+
+```python
+data.atom_mask({'CA', 'CB'})        # '@CA,CB'
+data.residue_mask({'ALA', 'GLY'})   # ':ALA,GLY'
+```
+
 Growth stops at the *directed* pairs in `qm.breakable_bonds`. `('CB', 'CA')` means
 "walking from an atom named CB onto one named CA is a cut". The protein table lists the
 CA–CB bond in both directions, so a side-chain selection stops at CB and a backbone
@@ -424,6 +459,8 @@ missing `MaxAngularMomentum` / `HubbardDerivs` raises with the name of the eleme
 |---|---|
 | `WATER_RESIDUES`, `ION_RESIDUES` | never accept redistributed charge |
 | `AMINO_ACIDS`, `NUCLEIC_ACIDS`, `POLYMER_RESIDUES` | default charge acceptors |
+| `PROTEIN_SIDECHAIN_MASK`, `PROTEIN_BACKBONE_MASK`, `NUCLEIC_BASE_MASK`, … | ready-made selection masks |
+| `PROTEIN_BACKBONE_ATOMS`, `NUCLEIC_BACKBONE_ATOMS`, `atom_mask`, `residue_mask` | what those masks are built from |
 | `*_BREAKABLE_BONDS`, `*_H_DIST` | where the QM region may be cut, and the link-atom distance |
 | `H_DIST_BY_ELEMENT` | fall-back X–H bond lengths |
 | `ELEMENTS`, `TYPE2ELEMENT`, `SPECIAL_SITE_ELEMENTS`, `guess_element` | element determination |
