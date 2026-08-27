@@ -8,7 +8,7 @@ that are guaranteed to describe the same atoms in the same order:
 |---|---|
 | `qm.top` | QM–QM bonds turned into connections (`funct 5`), link atoms and charge points as `[ virtual_sites2 ]`, adjusted charges, corrected `[ molecules ]` |
 | `qm.gro` | coordinates **in the topology's atom order**, velocities preserved |
-| `qm.ndx` | `[ QM ]` (QM atoms + link atoms), plus `[ freeze ]` and `[ Water_and_ions ]` |
+| `qm.ndx` | `[ QM ]` (QM atoms + link atoms), `[ Biomolecule ]`, `[ Water_and_ions ]`, `[ System ]` |
 | `dftb_in.hsd` | DFTB+/xTB input with the QM atoms **in the same order as `[ QM ]`** |
 
 NOTE: all ligands should be introduced directly into forcefield as .rtps (NOT .itps) !!!
@@ -299,6 +299,33 @@ QMmult    = 1
 `dftb_in.hsd` must sit in the run directory. mdrun reads it once and then overwrites the
 coordinates every step, so the *numbers* in `Geometry` do not matter for the run — but the
 atom **count** and **order** do.
+
+### The index groups
+
+| group | atoms |
+|---|---|
+| `QM` | what the QM code sees: the QM atoms **plus the link atoms** |
+| `Biomolecule` | the whole rewritten moleculetype — the protein or nucleic acid together with everything quantum: ligands, cofactors, metals, link atoms, and any solvent taken into the QM region |
+| `Water_and_ions` | the bulk that was left untouched |
+| `System` | everything |
+
+`Biomolecule` and `Water_and_ions` are the natural pair for temperature coupling and for
+trajectory output — the interesting part of the system against the bath around it:
+
+```
+tc-grps           = Biomolecule Water_and_ions
+tau-t             = 0.1 0.1
+ref-t             = 300 300
+compressed-x-grps = Biomolecule
+```
+
+`Biomolecule` is **not** the QM region — it is the whole molecule the QM region was cut out
+of, usually a few thousand atoms against a couple of hundred quantum ones. Ask for `QM` when
+you want the quantum atoms themselves.
+
+A group named `freeze` with the atoms of `Biomolecule` is written at the end of the file so
+that an older `.mdp` keeps working; the first three groups also keep their positions, so
+selecting a group by number from a pipe still means what it did.
 
 ---
 

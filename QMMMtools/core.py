@@ -905,7 +905,7 @@ def read_index_file(path):
     """``{group name: [1-based atom numbers]}`` of a Gromacs ``.ndx``."""
     groups, current = {}, None
     for line in Path(path).expanduser().read_text().splitlines():
-        stripped = line.strip()
+        stripped = line.split(';')[0].strip()      # Gromacs allows ; comments here
         if stripped.startswith('['):
             current = stripped.strip('[] \t')
             groups.setdefault(current, [])
@@ -1718,14 +1718,38 @@ class QM:
             handle.write(' '.join(str(i) for i in indexes[start:start + per_line]) + '\n')
 
     def write_ndx(self):
-        """``[ QM ]`` (QM atoms + link atoms), the QM moleculetype and the rest."""
+        """The index file: the QM region, the moleculetype it lives in, and the rest.
+
+        ``[ QM ]``
+            the atoms the QM code sees -- QM atoms plus link atoms.
+        ``[ Biomolecule ]``
+            the whole merged moleculetype, which is exactly what
+            :meth:`_merge_molecules` collects: the protein or nucleic acid plus
+            everything quantum -- ligands, cofactors, metals, link atoms and any
+            solvent that was taken into the QM region.
+        ``[ Water_and_ions ]``
+            the bulk that was left untouched.
+        ``[ System ]``
+            everything, so an ``.mdp`` that asks for it works with ``-n``.
+
+        ``[ freeze ]`` is written last with the atoms of ``[ Biomolecule ]``, so
+        that an ``.mdp`` written against the older name keeps working.  The three
+        original groups stay in their original positions as well, which keeps the
+        numbering that ``gmx trjconv`` and friends read from a pipe intact.
+        """
         n_qm_mol = len(self.qm_mol.atoms)
+        n_total = n_qm_mol + len(self.rest.atoms)
+        biomolecule = list(range(1, n_qm_mol + 1))
         with open(self.file_ondx, 'w') as handle:
             self._print_group(handle, 'QM', [i + 1 for i in self.qm_group_idx])
-            self._print_group(handle, 'freeze', list(range(1, n_qm_mol + 1)))
-            self._print_group(handle, 'Water_and_ions',
-                              list(range(n_qm_mol + 1, n_qm_mol + len(self.rest.atoms) + 1)))
-        LOGGER.info('wrote %s ([ QM ] = %d atoms)', self.file_ondx, len(self.qm_group_idx))
+            self._print_group(handle, 'Biomolecule', biomolecule)
+            self._print_group(handle, 'Water_and_ions', list(range(n_qm_mol + 1, n_total + 1)))
+            self._print_group(handle, 'System', list(range(1, n_total + 1)))
+            handle.write('; the former name of [ Biomolecule ], kept for older .mdp files\n')
+            self._print_group(handle, 'freeze', biomolecule)
+        LOGGER.info('wrote %s ([ QM ] = %d atoms, [ Biomolecule ] = %d, '
+                    '[ Water_and_ions ] = %d)', self.file_ondx, len(self.qm_group_idx),
+                    n_qm_mol, n_total - n_qm_mol)
 
     def write_otop(self):
         """Write the QM/MM topology, keeping every include of the input file."""
