@@ -43,7 +43,19 @@ def _add_hsd_options(parser, with_method_default=False):
                        help=f'QM method, default {DEFAULT_QM_METHOD} (see "qmmmtools methods")')
     group.add_argument('--skpath', help='directory with the Slater-Koster files, as mdrun '
                                         'will see it (DFTB methods only)')
-    group.add_argument('--sk-suffix', default='-c.spl', help='Slater-Koster file suffix')
+    group.add_argument('--sk-format', choices=sorted(data.SK_FORMATS),
+                       help='how the Slater-Koster files are named: '
+                            + ', '.join(f'{k} -> {v.example}'
+                                        for k, v in sorted(data.SK_FORMATS.items()))
+                            + f' (default {data.DEFAULT_SK_FORMAT})')
+    group.add_argument('--sk-separator', metavar='S',
+                       help='override what stands between the two element names')
+    group.add_argument('--sk-suffix', metavar='S',
+                       help='override the Slater-Koster file extension')
+    group.add_argument('--sk-lowercase', dest='sk_lowercase', action='store_true', default=None,
+                       help='override: write the element names in lower case')
+    group.add_argument('--no-sk-lowercase', dest='sk_lowercase', action='store_false',
+                       default=None, help='override: keep the element names as written')
     group.add_argument('--scc-tolerance', help='SCC convergence threshold, e.g. 1e-6')
     group.add_argument('--max-scc-iterations', type=int,
                        help='maximum number of SCC iterations')
@@ -158,7 +170,7 @@ def build_parser():
 
     tables = sub.add_parser('tables', help='show the link-atom and residue-name tables', parents=[common])
     tables.add_argument('what', nargs='?', default='all',
-                        choices=('all', 'bonds', 'residues', 'elements'))
+                        choices=('all', 'bonds', 'residues', 'elements', 'slater-koster'))
     return parser
 
 
@@ -202,7 +214,9 @@ def _apply_bond_tables(qm, args):
 
 def _hsd_kwargs(args):
     """The hsd options the user actually gave, so defaults are not forced on a rewrite."""
-    mapping = {'skpath': args.skpath, 'sk_suffix': getattr(args, 'sk_suffix', None),
+    mapping = {'skpath': args.skpath, 'sk_format': args.sk_format,
+               'sk_separator': args.sk_separator, 'sk_suffix': args.sk_suffix,
+               'sk_lowercase': args.sk_lowercase,
                'scc_tolerance': args.scc_tolerance, 'mixer': args.mixer,
                'max_scc_iterations': args.max_scc_iterations,
                'dftbplus_version': args.dftbplus_version}
@@ -236,9 +250,7 @@ def cmd_prepare(args):
     hsd = None
     if args.hsd is not None:
         hsd = Path(args.hsd) if args.hsd else outdir / 'dftb_in.hsd'
-        kwargs = _hsd_kwargs(args)
-        kwargs.setdefault('sk_suffix', args.sk_suffix)
-        qm.make_hsd(hsd, method=args.method, **kwargs)
+        qm.make_hsd(hsd, method=args.method, **_hsd_kwargs(args))
     qm.check_consistency(hsd)
 
     print(f'\nQM region : {len(qm.qm_idx)} atoms + {len(qm.la_idx)} link atoms'
@@ -261,7 +273,6 @@ def cmd_rewrite_hsd(args):
     elif args.out_gro:
         raise QMMMError('--out-gro needs an input to convert: give -c/--gro as well')
     kwargs = _hsd_kwargs(args)
-    kwargs.pop('sk_suffix', None) if args.method is None else None
     rewrite_hsd(args.hsd, geometry=geometry, source_hsd=args.source,
                 keep_types=not args.no_keep_types, method=args.method,
                 charge=args.charge, **kwargs)
@@ -323,6 +334,14 @@ def cmd_tables(args):
         print(f'  ions       ({len(data.ION_RESIDUES):3d}):', ' '.join(sorted(data.ION_RESIDUES)))
         print(f'  amino acids({len(data.AMINO_ACIDS):3d}) and nucleotides '
               f'({len(data.NUCLEIC_ACIDS):3d}) may accept redistributed charge')
+    if args.what in ('all', 'slater-koster'):
+        print('\nSlater-Koster file naming (--sk-format)')
+        for key, fmt in sorted(data.SK_FORMATS.items()):
+            mark = ' (default)' if key == data.DEFAULT_SK_FORMAT else ''
+            print(f'  {key:<5s} {fmt.example:<12s}{mark}')
+            print(f'        separator "{fmt.separator}", suffix "{fmt.suffix}", '
+                  f'lower case {"yes" if fmt.lowercase else "no"}')
+            print(f'        {fmt.description}')
     if args.what in ('all', 'elements'):
         print('\nDFTB parameters per element')
         for element in sorted(data.MAX_ANGULAR_MOMENTUM):

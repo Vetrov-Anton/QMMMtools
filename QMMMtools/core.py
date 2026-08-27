@@ -355,10 +355,60 @@ def list_methods():
         print(f'  {name:<12s} {entry.description} ({kind})')
 
 
-def hamiltonian_block(method, elements, charge, skpath=None, sk_suffix='-c.spl',
-                      sk_separator='', sk_lowercase=True, scc_tolerance='1e-6',
-                      max_scc_iterations=250, mixer=None):
-    """Build the ``Hamiltonian`` block of a ``dftb_in.hsd``."""
+def _sk_naming(sk_format=None, sk_suffix=None, sk_separator=None, sk_lowercase=None):
+    """Resolve a Slater-Koster naming convention plus per-field overrides."""
+    try:
+        base = data.get_sk_format(sk_format)
+    except KeyError as exc:
+        raise QMMMError(exc.args[0]) from None
+    if sk_suffix is None and sk_separator is None and sk_lowercase is None:
+        return base
+    return data.SKFormat(
+        f'{base.name}*',
+        base.separator if sk_separator is None else sk_separator,
+        base.suffix if sk_suffix is None else sk_suffix,
+        base.lowercase if sk_lowercase is None else bool(sk_lowercase))
+
+
+def _check_slater_koster(skpath, elements, naming):
+    """Warn early when the parameter directory does not hold the files DFTB+ will ask for.
+
+    DFTB+ builds every file name from the two element names, so a directory that
+    only has one of the two usual spellings makes it stop with "SK file not
+    found" halfway into an mdrun.  Cheaper to notice here.
+    """
+    directory = Path(skpath).expanduser()
+    if not directory.is_dir():
+        LOGGER.warning('the Slater-Koster directory %s does not exist here; make sure it '
+                       'does on the machine that runs mdrun, and that it holds the files '
+                       'of the "%s" convention (%s)', skpath, naming.name, naming.example)
+        return
+    wanted = [naming.file_name(first, second) for first in elements for second in elements]
+    missing = [name for name in wanted if not (directory / name).is_file()]
+    if not missing:
+        LOGGER.debug('all %d Slater-Koster files of the "%s" convention found in %s',
+                     len(wanted), naming.name, skpath)
+        return
+    other = [key for key, fmt in data.SK_FORMATS.items()
+             if fmt.name != naming.name
+             and all((directory / fmt.file_name(a, b)).is_file() for a in elements for b in elements)]
+    hint = (f'; the files of the "{other[0]}" convention ({data.SK_FORMATS[other[0]].example}) '
+            f'are all there -- pass sk_format="{other[0]}"' if other else '')
+    LOGGER.warning('%d of the %d Slater-Koster files DFTB+ will ask for are not in %s, '
+                   'e.g. %s%s', len(missing), len(wanted), skpath, ', '.join(missing[:3]), hint)
+
+
+def hamiltonian_block(method, elements, charge, skpath=None, sk_format=None,
+                      sk_suffix=None, sk_separator=None, sk_lowercase=None,
+                      scc_tolerance='1e-6', max_scc_iterations=250, mixer=None):
+    """Build the ``Hamiltonian`` block of a ``dftb_in.hsd``.
+
+    ``sk_format`` picks how the Slater-Koster files of ``skpath`` are spelled:
+    ``'skf'`` (the default) writes the names of the plain files, ``Mg-C.skf``,
+    ``'spl'`` those of the spline files shipped next to them, ``mgc-c.spl``.
+    ``sk_separator``, ``sk_suffix`` and ``sk_lowercase`` override a single field
+    of that convention, for a set that spells its files in yet another way.
+    """
     method = get_method(method)
     charge = round(charge)
     scc = _scc_settings(scc_tolerance, max_scc_iterations, mixer)
@@ -379,9 +429,8 @@ def hamiltonian_block(method, elements, charge, skpath=None, sk_suffix='-c.spl',
     skpath = str(skpath)
     if not skpath.endswith('/'):
         skpath += '/'
-    if not Path(skpath).expanduser().is_dir():
-        LOGGER.warning('the Slater-Koster directory %s does not exist here; make sure it '
-                       'does on the machine that runs mdrun', skpath)
+    naming = _sk_naming(sk_format, sk_suffix, sk_separator, sk_lowercase)
+    _check_slater_koster(skpath, elements, naming)
 
     text = ['Hamiltonian = DFTB {\n', '  SCC = Yes\n', scc,
             f'  Charge = {charge}\n', '  MaxAngularMomentum {\n']
@@ -389,9 +438,9 @@ def hamiltonian_block(method, elements, charge, skpath=None, sk_suffix='-c.spl',
     text.append('  }\n')
     text += ['  SlaterKosterFiles = Type2FileNames {\n',
              f'    Prefix = {skpath}\n',
-             f'    Separator = "{sk_separator}"\n',
-             f'    LowerCaseTypeName = {"Yes" if sk_lowercase else "No"}\n',
-             f'    Suffix = "{sk_suffix}"\n  }}\n']
+             f'    Separator = "{naming.separator}"\n',
+             f'    LowerCaseTypeName = {"Yes" if naming.lowercase else "No"}\n',
+             f'    Suffix = "{naming.suffix}"\n  }}\n']
     if method.third_order:
         unknown = [e for e in elements if e not in HUBBARD_DERIVS]
         if unknown:
@@ -485,6 +534,8 @@ def write_hsd(file_hsd, geometry, charge, method=DEFAULT_QM_METHOD, skpath=None,
 
     ``dftbplus_version`` selects the input dialect: 24.1 and later want
     ``Analysis { PrintForces }``, 21.x to 23.x want ``CalculateForces``.
+    ``sk_format`` (and the ``sk_*`` overrides) select how the Slater-Koster file
+    names are built, see :func:`hamiltonian_block`.
     """
     if geometry.elements is None:
         raise QMMMError('the elements of the QM atoms are unknown; pass elements= to '
@@ -506,7 +557,8 @@ def write_hsd(file_hsd, geometry, charge, method=DEFAULT_QM_METHOD, skpath=None,
 
 
 def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, method=None,
-                charge=None, skpath=None, scc_tolerance=None, max_scc_iterations=None,
+                charge=None, skpath=None, sk_format=None, sk_suffix=None, sk_separator=None,
+                sk_lowercase=None, scc_tolerance=None, max_scc_iterations=None,
                 mixer=None, dftbplus_version=None, analysis=None, options=None, blocks=None,
                 **hamiltonian_kwargs):
     """Update parts of an existing ``dftb_in.hsd`` in place.
@@ -528,6 +580,11 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
         (from ``charge`` or the old file).
     charge, skpath, scc_tolerance, max_scc_iterations, mixer
         patched into the existing ``Hamiltonian`` when ``method`` is None.
+    sk_format, sk_suffix, sk_separator, sk_lowercase
+        how the Slater-Koster files are spelled -- ``'skf'`` for ``Mg-C.skf``,
+        ``'spl'`` for ``mgc-c.spl``.  Patched into the existing
+        ``SlaterKosterFiles`` block, so an input can be moved to a parameter
+        directory that ships the other spelling without touching anything else.
     dftbplus_version : str or float, optional
         rewrite the ``Analysis`` block for that DFTB+ release, which is how an
         input is moved between the ``CalculateForces`` (21.x-23.x) and
@@ -580,13 +637,17 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
             new_charge = float(old_charge)
         hsd.set_block('Hamiltonian',
                       hamiltonian_block(method, elements, new_charge, skpath=skpath,
+                                        sk_format=sk_format, sk_suffix=sk_suffix,
+                                        sk_separator=sk_separator, sk_lowercase=sk_lowercase,
                                         scc_tolerance=scc_tolerance or '1e-6',
                                         max_scc_iterations=max_scc_iterations or 250,
                                         mixer=mixer, **hamiltonian_kwargs))
         changed.append(f'Hamiltonian -> {get_method(method).name}')
     else:
+        sk_asked = (skpath, sk_format, sk_suffix, sk_separator, sk_lowercase)
         if hamiltonian is None and any(v is not None for v in
-                                       (charge, skpath, scc_tolerance, max_scc_iterations, mixer)):
+                                       (charge, scc_tolerance, max_scc_iterations, mixer)
+                                       + sk_asked):
             raise QMMMError(f'{file_hsd}: no Hamiltonian block to patch')
         body = hamiltonian[2:4] if hamiltonian else None
         if charge is not None:
@@ -602,13 +663,25 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
             hsd.set_block('Mixer', '  ' + _mixer_block(mixer) if mixer else None,
                           hsd.block_span('Hamiltonian')[2:4])
             changed.append('Mixer')
-        if skpath is not None:
-            path = str(skpath) if str(skpath).endswith('/') else str(skpath) + '/'
+        if any(v is not None for v in sk_asked):
             sk = hsd.block_span('SlaterKosterFiles', hsd.block_span('Hamiltonian')[2:4])
             if sk is None:
                 raise QMMMError(f'{file_hsd}: no SlaterKosterFiles block to point elsewhere')
-            hsd.set_value('Prefix', path, sk[2:4], indent='    ')
-            changed.append(f'skpath {path}')
+            if skpath is not None:
+                path = str(skpath) if str(skpath).endswith('/') else str(skpath) + '/'
+                hsd.set_value('Prefix', path, sk[2:4], indent='    ')
+                changed.append(f'skpath {path}')
+            if any(v is not None for v in sk_asked[1:]):
+                # only the fields that were asked for; the rest of the block stays
+                naming = _sk_naming(sk_format, sk_suffix, sk_separator, sk_lowercase)
+                if sk_format is not None or sk_separator is not None:
+                    hsd.set_value('Separator', f'"{naming.separator}"', sk[2:4], indent='    ')
+                if sk_format is not None or sk_suffix is not None:
+                    hsd.set_value('Suffix', f'"{naming.suffix}"', sk[2:4], indent='    ')
+                if sk_format is not None or sk_lowercase is not None:
+                    hsd.set_value('LowerCaseTypeName', 'Yes' if naming.lowercase else 'No',
+                                  sk[2:4], indent='    ')
+                changed.append(f'Slater-Koster file names ({naming.example})')
 
     if dftbplus_version is not None and analysis is None:
         release = parse_dftbplus_version(dftbplus_version)
@@ -1840,11 +1913,15 @@ class QM:
         skpath : path-like
             directory with the Slater-Koster files (DFTB methods only).  Give the
             path as mdrun will see it -- a relative one is fine.
+        sk_format : {'skf', 'spl'}
+            how the file names in that directory are spelled: ``'skf'`` (the
+            default) for ``Mg-C.skf``, ``'spl'`` for ``mgc-c.spl``.  A directory
+            that is readable from here is checked against the choice.
         charge : int, optional
             overrides the charge worked out by :meth:`job`.
         **kwargs
             passed on to :func:`write_hsd` / :func:`hamiltonian_block`:
-            ``dftbplus_version``, ``sk_suffix``, ``sk_separator``,
+            ``dftbplus_version``, ``sk_separator``, ``sk_suffix``,
             ``sk_lowercase``, ``scc_tolerance``, ``max_scc_iterations``,
             ``mixer``, ``analysis``, ``options``, ``extra``.  Charged metal sites
             often need ``mixer='anderson'``; DFTB+ 21.x-23.x needs

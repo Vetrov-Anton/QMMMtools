@@ -11,7 +11,8 @@ The three groups of tables are
 * link-atom tables -- which bonds may be cut and how far from the QM atom the
   link atom is placed;
 * QM-method definitions -- the ``Hamiltonian`` block that goes into
-  ``dftb_in.hsd``.
+  ``dftb_in.hsd``, together with the naming conventions of the Slater-Koster
+  files it points at.
 """
 
 # ---------------------------------------------------------------------------
@@ -308,6 +309,90 @@ HUBBARD_DERIVS = {
     'H': -0.1857, 'I': -0.0433, 'K': -0.0339, 'Mg': -0.0200, 'N': -0.1535,
     'Na': -0.0454, 'O': -0.1575, 'P': -0.1400, 'S': -0.1100, 'Zn': -0.0300,
 }
+
+
+# ---------------------------------------------------------------------------
+# Slater-Koster file names
+# ---------------------------------------------------------------------------
+# DFTB+ does not take a list of Slater-Koster files, it builds every name from
+# the two element names:
+#
+#     Prefix + first + Separator + second + Suffix
+#
+# with the element names lower-cased when ``LowerCaseTypeName = Yes``.  A
+# parameter set usually ships the same data under two spellings -- 3ob-3-1 has
+# both ``Mg-C.skf`` and ``mgc-c.spl`` -- so the format only has to match the
+# files that are really in the directory, and the wrong one makes DFTB+ stop
+# with "SK file not found".
+
+
+class SKFormat:
+    """One naming convention for the Slater-Koster files of a parameter set.
+
+    Parameters
+    ----------
+    separator : str
+        what stands between the two element names in the file name.
+    suffix : str
+        the file extension, used exactly as written -- ``LowerCaseTypeName``
+        only touches the element names, never the suffix.
+    lowercase : bool
+        write the element names in lower case.
+    """
+
+    def __init__(self, name, separator, suffix, lowercase, description=''):
+        self.name = name
+        self.separator = separator
+        self.suffix = suffix
+        self.lowercase = lowercase
+        self.description = description
+
+    def file_name(self, first, second):
+        """Name of the file DFTB+ will look for, e.g. ``('Mg', 'C') -> 'Mg-C.skf'``."""
+        if self.lowercase:
+            first, second = first.lower(), second.lower()
+        return f'{first}{self.separator}{second}{self.suffix}'
+
+    @property
+    def example(self):
+        return self.file_name('Mg', 'C')
+
+    def __repr__(self):
+        return f'<SKFormat {self.name}: {self.example}>'
+
+
+#: The naming conventions that come with the usual parameter sets.  Add an entry
+#: here for a set that spells its files differently, or pass ``sk_separator`` /
+#: ``sk_suffix`` / ``sk_lowercase`` to override a single field.
+SK_FORMATS = {
+    'skf': SKFormat('skf', '-', '.skf', False,
+                    'element names as written, hyphen, .skf -- the plain files of '
+                    '3ob-3-1, mio and most other sets'),
+    'spl': SKFormat('spl', '', '-c.spl', True,
+                    'lower-case element names glued together, -c.spl -- the spline '
+                    'files shipped alongside them'),
+}
+
+#: The spelling used when nothing else is asked for.
+DEFAULT_SK_FORMAT = 'skf'
+
+
+def get_sk_format(sk_format=None):
+    """Look up an :class:`SKFormat` by name; an SKFormat is passed through."""
+    if sk_format is None:
+        sk_format = DEFAULT_SK_FORMAT
+    if isinstance(sk_format, SKFormat):
+        return sk_format
+    try:
+        return SK_FORMATS[str(sk_format).lower()]
+    except KeyError:
+        raise KeyError(f'unknown Slater-Koster file format {sk_format!r}; '
+                       f'known: {", ".join(sorted(SK_FORMATS))}') from None
+
+
+def sk_file_name(first, second, sk_format=None):
+    """The Slater-Koster file name DFTB+ builds for an element pair."""
+    return get_sk_format(sk_format).file_name(first, second)
 
 
 class QMMethod:

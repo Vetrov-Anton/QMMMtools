@@ -117,7 +117,7 @@ remember to set QMcharge = -2 in the .mdp
 | `rewrite-hsd` | update an existing `dftb_in.hsd` — needs only a `.gro` and a `.ndx` |
 | `check` | verify that a `.gro`, a `.ndx` and a `.hsd` describe the same QM atoms |
 | `methods` | list the available QM methods |
-| `tables` | print the link-atom and residue-name tables |
+| `tables` | print the link-atom, residue-name, element and Slater–Koster tables |
 
 `qmmmtools prepare --help` lists every option.
 
@@ -327,6 +327,57 @@ manual gives for DFTB3-D3H5.
 
 GFN2-xTB was verified to run through the GROMACS interface.
 
+### Slater–Koster file names
+
+DFTB+ is never given a list of files; it builds every name from the two element names:
+
+```
+Prefix + first + Separator + second + Suffix
+```
+
+A parameter set usually ships the same data twice — `3ob-3-1` holds both `Mg-C.skf` and
+`mgc-c.spl` — so the spelling has to match the files that are really in the directory,
+and the wrong one makes DFTB+ stop with *SK file not found* in the middle of an mdrun.
+`sk_format` (`--sk-format`) picks it:
+
+| format | file | separator | suffix | lower case |
+|---|---|---|---|---|
+| `skf` — default | `Mg-C.skf` | `-` | `.skf` | no |
+| `spl` | `mgc-c.spl` | *(none)* | `-c.spl` | yes |
+
+```python
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH)                     # Mg-C.skf
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH, sk_format='spl')    # mgc-c.spl
+```
+
+```bash
+qmmmtools prepare ... --hsd --skpath ./3ob-3-1/ --sk-format spl
+qmmmtools tables slater-koster
+```
+
+`sk_separator`, `sk_suffix` and `sk_lowercase` (`--sk-separator`, `--sk-suffix`,
+`--sk-lowercase` / `--no-sk-lowercase`) override one field each, for a set that spells
+its files in yet another way:
+
+```python
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH, sk_separator='_', sk_suffix='.par')
+```
+
+When the directory is readable from here it is checked against the choice, and a
+mismatch names the convention that would have worked:
+
+```
+49 of the 49 Slater-Koster files DFTB+ will ask for are not in ./3ob-3-1/,
+e.g. C-C.par, C-H.par, C-O.par; the files of the "skf" convention (Mg-C.skf)
+are all there -- pass sk_format="skf"
+```
+
+An input that already works only needs its `SlaterKosterFiles` block re-pointed:
+
+```bash
+qmmmtools rewrite-hsd dftb_in.hsd --skpath /new/3ob-3-1/ --sk-format skf
+```
+
 ### DFTB+ release
 
 DFTB+ 24.1 renamed the `Analysis` switch that returns the forces from `CalculateForces` to
@@ -355,6 +406,7 @@ for byte, so hand-tuned settings survive:
 qm.rewrite_hsd('dftb_in.hsd')                                   # coordinates only
 qm.rewrite_hsd('dftb_in.hsd', charge=-3, mixer='anderson')      # + settings
 qm.rewrite_hsd('dftb_in.hsd', method='gfn2-xtb', charge=-2)     # swap the Hamiltonian
+qm.rewrite_hsd('dftb_in.hsd', skpath='/new/3ob/', sk_format='spl')   # other SK files
 qm.rewrite_hsd('dftb_in.hsd', blocks={'Driver': 'Driver = {}'}) # any top-level block
 qm.rewrite_hsd('dftb_in.hsd', geometry=False, scc_tolerance='1e-7')  # settings only
 ```
@@ -446,6 +498,9 @@ data.HUBBARD_DERIVS['Se'] = -0.11                # only needed by the DFTB3 meth
 data.QM_METHODS['gfn0-xtb'] = data.QMMethod(
     'gfn0-xtb', 'xtb', 'GFN0-xTB via tblite', xtb_method='GFN0-xTB')
 data.QM_METHODS.pop('dftb2', None)          # or remove one
+
+# --- a set that names its files differently ------------------------------
+data.SK_FORMATS['par'] = data.SKFormat('par', '_', '.par', False)
 ```
 
 The same is reachable from the command line with `--preset`, `--breakable QM:MM:DIST` and
@@ -467,6 +522,7 @@ missing `MaxAngularMomentum` / `HubbardDerivs` raises with the name of the eleme
 | `MAX_ANGULAR_MOMENTUM_3OB`, `HUBBARD_DERIVS` | the fifteen elements of 3ob-3-1, straight from its README |
 | `MAX_ANGULAR_MOMENTUM_OTHER` | elements from other Slater–Koster sets, merged into `MAX_ANGULAR_MOMENTUM` |
 | `QM_METHODS` | the `Hamiltonian` blocks |
+| `SK_FORMATS`, `DEFAULT_SK_FORMAT`, `sk_file_name` | how the Slater–Koster file names are spelled |
 
 ## Consistency
 
@@ -523,6 +579,17 @@ to `data.TYPE2ELEMENT`.
 **DFTB+ halts on `dftb_in.hsd` without saying much.** Usually a dialect mismatch: a 21.x–23.x
 binary reading `PrintForces`, or a 24.1+ binary reading `CalculateForces`. Point
 `--dftbplus-version` at the release you actually run.
+
+**`Could not open SK-file` / *SK file not found*.** The parameter directory spells its
+files the other way — `mgc-c.spl` where `Mg-C.skf` was asked for, or the reverse. Switch
+with `--sk-format` (`skf` is the default), no re-preparation needed:
+
+```bash
+qmmmtools rewrite-hsd dftb_in.hsd --sk-format spl
+```
+
+Preparation warns about this by itself whenever `skpath` is readable from the machine that
+writes the input.
 
 **`no DFTB angular momentum known for [...]` or `no Hubbard derivative known for [...]`.**
 The element is outside 3ob-3-1, which covers only Br, C, Ca, Cl, F, H, I, K, Mg, N, Na, O,
