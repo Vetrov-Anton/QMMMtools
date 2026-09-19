@@ -27,7 +27,7 @@ from .core import (QM, QMGeometry, QMMMError, HsdFile, set_log_level, LOGGER,
 from .data import (QMMethod, QM_METHODS, DEFAULT_QM_METHOD,
                    SKFormat, SK_FORMATS, DEFAULT_SK_FORMAT, sk_file_name)
 
-__version__ = '1.5.0'
+__version__ = '1.6.0'
 
 __all__ = [
     'QM', 'QMGeometry', 'QMMMError', 'HsdFile', 'QMMethod', 'SKFormat',

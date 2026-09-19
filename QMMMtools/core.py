@@ -1166,8 +1166,50 @@ class QM:
                     stack.append(partner.idx)
         return visited
 
+    def close_qm_region(self, indexes):
+        """Take in every MM atom that sits between two QM atoms, then keep growing.
+
+        An MM atom bonded to more than one QM atom -- the ``...QM-MM-QM...``
+        case -- cannot be capped.  It would need one link atom per QM neighbour:
+        several massless hydrogens a bond length apart on the same centre, each
+        pretending to terminate the QM region on its own, with the atom they cap
+        counted once in the QM calculation and once in the force field.  Such an
+        atom therefore belongs to the QM region, and the region grows on from it
+        to the next breakable bond exactly as it grows from a seed.
+
+        Taking one bridge in can expose the next, so this repeats until no MM
+        atom has two QM neighbours left.  Returns the closed set of indexes.
+        """
+        qm = set(indexes)
+        atoms = self.itop.atoms
+        absorbed = []
+        while True:
+            qm_neighbours = {}
+            for idx in qm:
+                for partner in atoms[idx].bond_partners:
+                    if partner.idx not in qm:
+                        qm_neighbours.setdefault(partner.idx, set()).add(idx)
+            bridges = sorted(i for i, seen in qm_neighbours.items() if len(seen) > 1)
+            if not bridges:
+                break
+            for idx in bridges:
+                if idx in qm:          # an earlier bridge of this round grew over it
+                    continue
+                atom = atoms[idx]
+                absorbed.append(f'{atom.residue.name}{atom.residue.number}:{atom.name}')
+                qm |= self.dfs_extend(idx)
+        if absorbed:
+            shown = ', '.join(absorbed[:8]) + (', ...' if len(absorbed) > 8 else '')
+            LOGGER.info('%d MM atom(s) stood between two QM atoms and joined the QM region, '
+                        'which then grew on from them: %s', len(absorbed), shown)
+        return sorted(qm)
+
     def extend_until_break(self, amber_mask):
-        """Turn a mask into an explicit ``@i,j,k`` mask grown to the breakable bonds."""
+        """Turn a mask into an explicit ``@i,j,k`` mask grown to the breakable bonds.
+
+        The grown region is closed with :meth:`close_qm_region`, so the mask it
+        returns never leaves a single MM atom between two QM ones.
+        """
         seeds = [atom.idx for atom in self._select(amber_mask)]
         if not seeds:
             raise QMMMError(f'mask {amber_mask!r} selects no atoms')
@@ -1176,7 +1218,7 @@ class QM:
             if index not in visited:
                 visited |= self.dfs_extend(index)
         LOGGER.info('extended %d seed atom(s) of %r to %d atoms', len(seeds), amber_mask, len(visited))
-        return '@' + ','.join(str(i + 1) for i in sorted(visited))
+        return '@' + ','.join(str(i + 1) for i in self.close_qm_region(visited))
 
     def _select(self, amber_mask):
         """Atoms of the input system matching ``amber_mask`` (a view, so
@@ -1206,6 +1248,9 @@ class QM:
         qm_input_idx = [atom.idx for atom in self._select(self.qm_input_mask)]
         if not qm_input_idx:
             raise QMMMError(f'mask {self.qm_input_mask!r} selects no atoms')
+        # the manual masks and the combination of several masks can put a single
+        # MM atom between two QM ones just as well as one extension can
+        qm_input_idx = self.close_qm_region(qm_input_idx)
         qm_flag[qm_input_idx] = True
         self._merged_name = None       # determine_qm() may be called more than once
 
@@ -1421,6 +1466,19 @@ class QM:
             self.qmmm_bonds.append(bond)
             mm1.append(bond.atom2.idx if in1 else bond.atom1.idx)
         self.mm1_atoms = sorted(set(mm1))
+        # one link atom per MM atom: close_qm_region() guarantees it, and a QM
+        # region built by hand through the low-level methods must honour it too
+        counts = {idx: mm1.count(idx) for idx in self.mm1_atoms}
+        doubled = [idx for idx, n in counts.items() if n > 1]
+        if doubled:
+            labels = ', '.join(
+                f'{self.qm_mol.atoms[idx].residue.name}{self.qm_mol.atoms[idx].residue.number}:'
+                f'{self.qm_mol.atoms[idx].name} ({counts[idx]} bonds)' for idx in doubled[:5])
+            raise QMMMError(
+                f'{len(doubled)} MM atom(s) are bonded to more than one QM atom and would each '
+                f'carry that many link atoms: {labels}. Such an atom has to be part of the QM '
+                'region -- run the selection through close_qm_region() (determine_qm() and '
+                'choose_qm_to_extend() do it for you).')
         LOGGER.info('%d QM/MM boundary bond(s) on %d MM atom(s)',
                     len(self.qmmm_bonds), len(self.mm1_atoms))
         for bond in self.qmmm_bonds:

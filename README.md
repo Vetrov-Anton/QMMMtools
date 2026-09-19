@@ -200,6 +200,30 @@ CA–CB bond in both directions, so a side-chain selection stops at CB and a bac
 selection stops at CA; the peptide cuts `N–CA`, `CA–C` and `C–CA` let a single peptide
 unit be taken on its own.
 
+### No MM atom between two QM atoms
+
+Whatever the masks ask for, the region is closed so that **no MM atom is bonded to more
+than one QM atom**. Such an atom — the `…QM–MM–QM…` case — cannot be capped: it would
+need one link atom per QM neighbour, several massless hydrogens a bond length apart on the
+same centre, each pretending to terminate the region on its own, and the atom they cap
+would be described by the QM calculation and by the force field at the same time.
+
+It happens more easily than it looks. Growing from residues 496 and 498 walks along both
+peptide bonds into residue 497, stops at `N–CA` from one side and at `C–CA` from the other,
+and leaves exactly one MM atom — `CA` — wedged between two QM ones:
+
+```
+... C(496) ── N(497) ── CA(497) ── C(497) ── N(498) ...
+      QM        QM        MM!        QM        QM
+```
+
+Such an atom joins the QM region, and the region grows on from it to the next breakable
+bond exactly as it grows from a seed — above, `CA` and its `HA` come in and the cut moves
+to `CA–CB`. Taking one bridge in can expose the next, so the closure repeats until none is
+left. `qm.close_qm_region()` does it, and both selectors as well as `determine_qm()` call
+it, so it also catches a bridge produced by a manual mask or by the combination of several
+masks. A selection that has no such atom is left exactly as it was.
+
 ## Charge
 
 `job()` with no `qm_aim_charge` derives the integer QM charge from the force field:
@@ -623,6 +647,12 @@ The element is outside 3ob-3-1, which covers only Br, C, Ca, Cl, F, H, I, K, Mg,
 P, S and Zn. Use a Slater–Koster set that has it and add the element to
 `data.MAX_ANGULAR_MOMENTUM` / `data.HUBBARD_DERIVS` with that set's own values.
 
+**`MM atom(s) are bonded to more than one QM atom`.** Only reachable by driving the
+low-level methods by hand: the QM region was handed to `find_qmmm_bonds()` without being
+closed, and one MM atom would carry a link atom per QM neighbour. Pass the selection
+through `qm.close_qm_region()`; `choose_qm_to_extend()`, `choose_qm_manually()` and
+`determine_qm()` all do it already, so `job()` cannot hit this.
+
 **`[ molecules ] accounts for N atoms but the structure has M`.** The topology and the
 coordinate file do not describe the same system.
 
@@ -636,8 +666,10 @@ from your interpreter. Use `pip install git+https://github.com/Vetrov-Anton/QMMM
 * The input must be a standalone GROMACS `.top` (with `[ molecules ]`), not a bare `.itp`.
 * Molecules that contain a QM atom, or that may accept charge, are merged into a single
   moleculetype; a molecule cannot be split between the QM block and the rest.
-* The link-atom placement assumes a single bond is cut per QM–MM pair; cutting double
-  bonds or aromatic rings is chemically unsound and is not checked for.
+* The link-atom placement assumes a single bond is cut per QM–MM pair. One link atom per
+  MM atom is guaranteed — an MM atom bonded to two QM atoms is taken into the QM region
+  instead — but cutting a double bond or an aromatic ring is chemically unsound and is not
+  checked for.
 * The `[ molecules ]` bookkeeping assumes the coordinate file follows the topology order,
   which is the GROMACS convention.
 
