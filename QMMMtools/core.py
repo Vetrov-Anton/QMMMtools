@@ -1592,8 +1592,11 @@ class QM:
     def vs2_and_LA(self, link_la_to_mm1=True, link_la_to_mm2=False):
         """Place a link atom on every QM/MM bond as a two-body virtual site.
 
-        The site sits on the QM--MM axis at ``H_dist`` from the QM atom, so its
-        Gromacs construction weight is ``d / |r_QM-MM|``.
+        The site is a ``virtual_sites2`` of function type 2 ("2fd"): it lies on
+        the QM--MM axis at a *fixed distance* ``H_dist`` from the QM atom,
+        ``r_LA = r_QM + d * r_QM,MM / |r_QM,MM|``, with ``d`` written in nm.  The
+        QM--LA distance therefore stays at its target value however the QM--MM
+        bond stretches during the run.
 
         The two flags add funct-5 bonds -- "connections" that carry no potential
         and exist only so that grompp generates exclusions around the link atom.
@@ -1624,8 +1627,9 @@ class QM:
                                 'is the coordinate file the right one for this topology?')
             d = self._link_atom_distance(aqm, amm)
             link = self._add_dummy('LA', 0.0, qm_xyz + d * (mm_xyz - qm_xyz) / r, res_n)
+            # funct 2: the parameter is the QM-LA distance itself, in nm
             self.vs2.append([str(atom_n + 1), str(aqm.idx + 1), str(amm.idx + 1),
-                             '1', f'{d / r:.3f}', '; qmmm'])
+                             '2', f'{d / 10:.4f}', '; qmmm'])
             self.LA_indexes.append(atom_n)
             self.la_idx.append(atom_n)
             if link_la_to_mm1:

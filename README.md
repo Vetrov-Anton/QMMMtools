@@ -254,8 +254,21 @@ nucleic-acid atoms (`qm.redistr_residues`) — never water and never ions.
 
 ## The QM/MM boundary
 
-Each QM–MM bond gets a hydrogen link atom, written as a two-body virtual site on the
-QM–MM axis at `H_dist` from the QM atom.
+Each QM–MM bond gets a hydrogen link atom, written as a two-body virtual site of function
+type 2 — GROMACS's "2fd", *on a line with a fixed distance*:
+
+```
+[ virtual_sites2 ]
+;   LA    QM    MM  funct      d (nm)
+ 10707   450   448      2      0.1090     ; qmmm
+```
+
+The site is built as `r_LA = r_QM + d · r_QM→MM / |r_QM→MM|`, so it stays on the QM–MM
+axis at exactly `H_dist` from the QM atom however the QM–MM bond stretches during the run.
+(Function type 1 would store a fraction of the bond instead, frozen from the starting
+geometry, and the QM–link-atom distance would breathe with the bond.) The charge points of
+the `RC`, `RCD` and `CS` schemes stay type 1 on purpose: they are defined as fractions of
+the MM1–MM2 bond.
 
 `H_dist` is the equilibrium X–H bond length of the **capped QM atom** — C 1.09 Å,
 N 1.01 Å, O 0.97 Å, S 1.34 Å. Anything else stretches or compresses a real bond inside
