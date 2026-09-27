@@ -314,6 +314,17 @@ class HsdFile:
         return False
 
 
+#: SCC convergence threshold written into ``dftb_in.hsd`` unless asked otherwise.
+#: The QM/MM forces are the derivative of a self-consistent energy, so a loose
+#: threshold leaves noise in them that no thermostat removes: 1e-9 keeps the
+#: charges converged far past the point where that noise matters, at the price of
+#: a few extra SCC iterations per step.
+DEFAULT_SCC_TOLERANCE = '1e-9'
+
+#: cap on the SCC iterations of one step
+DEFAULT_MAX_SCC_ITERATIONS = 250
+
+
 def _scc_settings(scc_tolerance, max_scc_iterations, mixer, indent='  '):
     """The SCC convergence lines shared by the DFTB and the xTB Hamiltonian."""
     out = []
@@ -400,7 +411,8 @@ def _check_slater_koster(skpath, elements, naming):
 
 def hamiltonian_block(method, elements, charge, skpath=None, sk_format=None,
                       sk_suffix=None, sk_separator=None, sk_lowercase=None,
-                      scc_tolerance='1e-6', max_scc_iterations=250, mixer=None):
+                      scc_tolerance=DEFAULT_SCC_TOLERANCE,
+                      max_scc_iterations=DEFAULT_MAX_SCC_ITERATIONS, mixer=None):
     """Build the ``Hamiltonian`` block of a ``dftb_in.hsd``.
 
     ``sk_format`` picks how the Slater-Koster files of ``skpath`` are spelled:
@@ -408,6 +420,10 @@ def hamiltonian_block(method, elements, charge, skpath=None, sk_format=None,
     ``'spl'`` those of the spline files shipped next to them, ``mgc-c.spl``.
     ``sk_separator``, ``sk_suffix`` and ``sk_lowercase`` override a single field
     of that convention, for a set that spells its files in yet another way.
+
+    ``scc_tolerance`` is the SCC convergence threshold,
+    :data:`DEFAULT_SCC_TOLERANCE` by default; ``None`` leaves the keyword out and
+    lets DFTB+ use its own.
     """
     method = get_method(method)
     charge = round(charge)
@@ -639,8 +655,9 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
                       hamiltonian_block(method, elements, new_charge, skpath=skpath,
                                         sk_format=sk_format, sk_suffix=sk_suffix,
                                         sk_separator=sk_separator, sk_lowercase=sk_lowercase,
-                                        scc_tolerance=scc_tolerance or '1e-6',
-                                        max_scc_iterations=max_scc_iterations or 250,
+                                        scc_tolerance=scc_tolerance or DEFAULT_SCC_TOLERANCE,
+                                        max_scc_iterations=(max_scc_iterations
+                                                           or DEFAULT_MAX_SCC_ITERATIONS),
                                         mixer=mixer, **hamiltonian_kwargs))
         changed.append(f'Hamiltonian -> {get_method(method).name}')
     else:

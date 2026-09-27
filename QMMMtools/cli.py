@@ -16,7 +16,9 @@ from pathlib import Path
 
 from . import data
 from .data import DEFAULT_QM_METHOD
-from .core import (DEFAULT_CHARGE_ROUNDING, DEFAULT_DFTBPLUS_VERSION, LOGGER, QM, QMMMError, HsdFile,
+from .core import (DEFAULT_CHARGE_ROUNDING, DEFAULT_DFTBPLUS_VERSION,
+                   DEFAULT_MAX_SCC_ITERATIONS, DEFAULT_SCC_TOLERANCE,
+                   LOGGER, QM, QMMMError, HsdFile,
                    _read_geometry_types, _rounding_threshold, get_method, list_methods,
                    read_index_file, read_qm_geometry, rewrite_hsd, set_log_level)
 
@@ -56,9 +58,12 @@ def _add_hsd_options(parser, with_method_default=False):
                        help='override: write the element names in lower case')
     group.add_argument('--no-sk-lowercase', dest='sk_lowercase', action='store_false',
                        default=None, help='override: keep the element names as written')
-    group.add_argument('--scc-tolerance', help='SCC convergence threshold, e.g. 1e-6')
+    group.add_argument('--scc-tolerance',
+                       help='SCC convergence threshold (default {})'.format(
+                           DEFAULT_SCC_TOLERANCE))
     group.add_argument('--max-scc-iterations', type=int,
-                       help='maximum number of SCC iterations')
+                       help='maximum number of SCC iterations (default {})'.format(
+                           DEFAULT_MAX_SCC_ITERATIONS))
     group.add_argument('--mixer', help='"anderson" (recommended for charged metal sites), '
                                        '"broyden", or a raw HSD block')
     group.add_argument('--dftbplus-version', metavar='V',

@@ -461,6 +461,29 @@ existing input moves between the two by rewriting that one keyword:
 qmmmtools rewrite-hsd dftb_in.hsd --dftbplus-version 21
 ```
 
+### SCC convergence
+
+```python
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH)                             # SCCTolerance = 1e-9
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH, scc_tolerance='1e-6',
+            max_scc_iterations=500)
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH, scc_tolerance=None)         # leave it to DFTB+
+```
+
+```bash
+qmmmtools prepare ... --hsd --scc-tolerance 1e-6 --max-scc-iterations 500
+```
+
+`scc_tolerance` defaults to `1e-9` (`QMMMtools.DEFAULT_SCC_TOLERANCE`) and
+`max_scc_iterations` to 250. The tight threshold is deliberate: the QM/MM forces are the
+derivative of a self-consistent energy, so charges that are only roughly converged leave
+noise in every force of the QM region, and that noise is systematic — no thermostat removes
+it. `1e-9` costs a few extra iterations per step and puts the residual far below anything
+that matters. Measured on a 238-atom region with the Anderson mixer: 25–103 iterations per
+step, 50 on average, nowhere near the 250 cap — about 6 % more work than `1e-8` would be.
+
+Passing `None` omits the keyword and lets DFTB+ apply its own default.
+
 ### Updating an existing `dftb_in.hsd`
 
 `rewrite_hsd` edits an input in place — everything it is not asked to change stays byte
