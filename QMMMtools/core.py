@@ -289,6 +289,11 @@ class HsdFile:
         text = text if text.endswith('\n') else text + '\n'
         if found:
             self.text = self.text[:found[0]] + text + self.text[found[1]:]
+        elif span:
+            # a block of some parent (Mixer or Solver of the Hamiltonian): it has to
+            # land inside that parent, not at the end of the file
+            self.text = self.text[:span[0]] + '\n' + text.rstrip('\n') + self.text[span[0]:]
+            LOGGER.debug('inserted a new %s block', name)
         else:
             self.text = self.text.rstrip('\n') + '\n' + text
             LOGGER.debug('appended a new %s block', name)
@@ -325,9 +330,35 @@ DEFAULT_SCC_TOLERANCE = '1e-9'
 DEFAULT_MAX_SCC_ITERATIONS = 250
 
 
-def _scc_settings(scc_tolerance, max_scc_iterations, mixer, indent='  '):
+#: eigensolvers of DFTB+ that can be asked for by name, lower case -> HSD spelling.
+#: DivideAndConquer is the fastest one with Intel MKL; DFTB+ itself defaults to
+#: RelativelyRobust.  The energies are the same.
+SOLVERS = {
+    'divideandconquer': 'DivideAndConquer',
+    'dc': 'DivideAndConquer',
+    'relativelyrobust': 'RelativelyRobust',
+    'rr': 'RelativelyRobust',
+    'qr': 'QR',
+}
+
+
+def _solver_block(solver):
+    """``solver='DivideAndConquer'|'RelativelyRobust'|'QR'``, or a raw HSD string."""
+    text = str(solver).strip()
+    if '{' in text or '=' in text:
+        return text if text.lower().startswith('solver') else f'Solver = {text}'
+    key = text.lower().replace('_', '').replace('-', '').replace(' ', '')
+    if key not in SOLVERS:
+        raise QMMMError(f'unknown solver {solver!r}: use DivideAndConquer, RelativelyRobust '
+                        'or QR, or give the HSD text, e.g. "Solver = MAGMA {}"')
+    return f'Solver = {SOLVERS[key]} {{}}'
+
+
+def _scc_settings(scc_tolerance, max_scc_iterations, mixer, indent='  ', solver=None):
     """The SCC convergence lines shared by the DFTB and the xTB Hamiltonian."""
     out = []
+    if solver:
+        out.append(indent + _solver_block(solver) + '\n')
     if scc_tolerance is not None:
         out.append(f'{indent}SCCTolerance = {scc_tolerance}\n')
     if max_scc_iterations:
@@ -412,7 +443,8 @@ def _check_slater_koster(skpath, elements, naming):
 def hamiltonian_block(method, elements, charge, skpath=None, sk_format=None,
                       sk_suffix=None, sk_separator=None, sk_lowercase=None,
                       scc_tolerance=DEFAULT_SCC_TOLERANCE,
-                      max_scc_iterations=DEFAULT_MAX_SCC_ITERATIONS, mixer=None):
+                      max_scc_iterations=DEFAULT_MAX_SCC_ITERATIONS, mixer=None,
+                      solver=None):
     """Build the ``Hamiltonian`` block of a ``dftb_in.hsd``.
 
     ``sk_format`` picks how the Slater-Koster files of ``skpath`` are spelled:
@@ -424,10 +456,14 @@ def hamiltonian_block(method, elements, charge, skpath=None, sk_format=None,
     ``scc_tolerance`` is the SCC convergence threshold,
     :data:`DEFAULT_SCC_TOLERANCE` by default; ``None`` leaves the keyword out and
     lets DFTB+ use its own.
+
+    ``solver`` picks the eigensolver: ``'DivideAndConquer'`` (the fastest with
+    Intel MKL), ``'RelativelyRobust'``, ``'QR'``, or a raw HSD string.  ``None``
+    (the default) leaves the keyword out, and DFTB+ uses RelativelyRobust.
     """
     method = get_method(method)
     charge = round(charge)
-    scc = _scc_settings(scc_tolerance, max_scc_iterations, mixer)
+    scc = _scc_settings(scc_tolerance, max_scc_iterations, mixer, solver=solver)
     if method.kind == 'xtb':
         return (f'Hamiltonian = xTB {{\n'
                 f'  Method = "{method.xtb_method}"\n'
@@ -575,8 +611,8 @@ def write_hsd(file_hsd, geometry, charge, method=DEFAULT_QM_METHOD, skpath=None,
 def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, method=None,
                 charge=None, skpath=None, sk_format=None, sk_suffix=None, sk_separator=None,
                 sk_lowercase=None, scc_tolerance=None, max_scc_iterations=None,
-                mixer=None, dftbplus_version=None, analysis=None, options=None, blocks=None,
-                **hamiltonian_kwargs):
+                mixer=None, solver=None, dftbplus_version=None, analysis=None, options=None,
+                blocks=None, **hamiltonian_kwargs):
     """Update parts of an existing ``dftb_in.hsd`` in place.
 
     Everything that is not addressed stays byte for byte as it was, so
@@ -594,8 +630,9 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
         replace the whole ``Hamiltonian`` block with a freshly built one.  Needs
         the elements (from ``geometry`` or the old ``TypeNames``) and a charge
         (from ``charge`` or the old file).
-    charge, skpath, scc_tolerance, max_scc_iterations, mixer
+    charge, skpath, scc_tolerance, max_scc_iterations, mixer, solver
         patched into the existing ``Hamiltonian`` when ``method`` is None.
+        ``solver='DivideAndConquer'`` is the eigensolver to use with Intel MKL.
     sk_format, sk_suffix, sk_separator, sk_lowercase
         how the Slater-Koster files are spelled -- ``'skf'`` for ``Mg-C.skf``,
         ``'spl'`` for ``mgc-c.spl``.  Patched into the existing
@@ -658,13 +695,13 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
                                         scc_tolerance=scc_tolerance or DEFAULT_SCC_TOLERANCE,
                                         max_scc_iterations=(max_scc_iterations
                                                            or DEFAULT_MAX_SCC_ITERATIONS),
-                                        mixer=mixer, **hamiltonian_kwargs))
+                                        mixer=mixer, solver=solver, **hamiltonian_kwargs))
         changed.append(f'Hamiltonian -> {get_method(method).name}')
     else:
         sk_asked = (skpath, sk_format, sk_suffix, sk_separator, sk_lowercase)
         if hamiltonian is None and any(v is not None for v in
-                                       (charge, scc_tolerance, max_scc_iterations, mixer)
-                                       + sk_asked):
+                                       (charge, scc_tolerance, max_scc_iterations, mixer,
+                                        solver) + sk_asked):
             raise QMMMError(f'{file_hsd}: no Hamiltonian block to patch')
         body = hamiltonian[2:4] if hamiltonian else None
         if charge is not None:
@@ -680,6 +717,10 @@ def rewrite_hsd(file_hsd, geometry=None, source_hsd=None, keep_types=True, metho
             hsd.set_block('Mixer', '  ' + _mixer_block(mixer) if mixer else None,
                           hsd.block_span('Hamiltonian')[2:4])
             changed.append('Mixer')
+        if solver is not None:
+            hsd.set_block('Solver', '  ' + _solver_block(solver) if solver else None,
+                          hsd.block_span('Hamiltonian')[2:4])
+            changed.append('Solver')
         if any(v is not None for v in sk_asked):
             sk = hsd.block_span('SlaterKosterFiles', hsd.block_span('Hamiltonian')[2:4])
             if sk is None:
@@ -973,6 +1014,7 @@ class QM:
         self.qm_idx = set()           # indices in qm_mol of the real QM atoms
         self.la_idx = []              # indices in qm_mol of the link atoms
         self.cp_idx = []              # indices in qm_mol of the charge points
+        self.cp_exclusions = []       # [ exclusions ] rows of the charge points, 1-based
         self.qm_group_idx = []        # QM atoms + link atoms, sorted -> [ QM ] group
         self.n_input_atoms = 0        # size of qm_mol before link atoms were added
 
@@ -983,6 +1025,9 @@ class QM:
         self.solvent_and_ions = set(SOLVENT_AND_IONS)
         self.redistr_residues = set(POLYMER_RESIDUES)  # may accept redistributed charge
         self.strict_h_dist = False    # True -> never guess a link-atom distance
+        # exclude each charge point of RC/RCD/CS from its own MM1, MM2 and sibling
+        # points, see _redist_points(); False writes no exclusions, as before 1.9
+        self.exclude_charge_points = True
         # fractional part at which the MM charge sum rounds up in magnitude
         self.charge_rounding = DEFAULT_CHARGE_ROUNDING
 
@@ -1295,6 +1340,7 @@ class QM:
         self.qm_mask = '@' + ','.join(str(i + 1) for i in self.qm_group_idx)
         self.qm = self.qm_mol.view[self.qm_mask]
         self.la_idx, self.cp_idx = [], []
+        self.cp_exclusions = []
 
         residues = {self.itop.atoms[i].residue.idx for i in qm_input_idx}
         # how many molecules each [ molecules ] entry lost to the merged moleculetype
@@ -1523,25 +1569,43 @@ class QM:
     def _n_qm(self, *atoms):
         return sum(1 for atom in atoms if atom.idx in self.qm_idx)
 
-    def process_mm_terms(self, mode):
+    def process_mm_terms(self, mode='none', lj_scheme=None):
         """Remove the MM bonded terms of the QM region from the written topology.
 
         ``mode``
-            ``'no'``       leave them in place.  grompp of the DFTB+ build removes
-                           them itself and reports what it removed, so this is the
-                           default.
-            ``'classic'``  the scheme grompp uses: a term goes as soon as all but
-                           one of its atoms are QM, and the 1-4 pairs between a QM
-                           atom and a directly bonded MM atom go as well.
-            ``'amber'``    only terms whose atoms are *all* QM are removed.
+            ``'none'``     leave them in place (``'no'`` is the older spelling).
+                           grompp of the DFTB+ build removes them itself and
+                           lists what it removed, so this is the default.
+            ``'classic'``  the default rule of grompp
+                           (``GMX_QMMM_BONDED_SCHEME=classic``): a term goes as
+                           soon as all but one of its atoms are QM.
+            ``'amber'``    only terms whose atoms are *all* QM are removed
+                           (``GMX_QMMM_BONDED_SCHEME=amber``).
+
+        ``lj_scheme`` -- what ``'classic'`` does with the 1-4 pairs between a QM
+        atom and an MM1 atom, the counterpart of ``GMX_QMMM_LJ_SCHEME``:
+
+            ``'exclude'``     remove them, as this module always did.  Complete
+                              only together with ``GMX_QMMM_LJ_SCHEME=exclude``
+                              at grompp, which adds the matching LJ exclusions.
+            ``'forcefield'``  keep them, the default of grompp.
+
+        ``None`` means ``'exclude'``, so that an existing call keeps its result.
+
+        grompp applies its own scheme to whatever is left, so a term kept here is
+        still removed there if its scheme says so; this only strips earlier.
         """
-        mode = (mode or 'no').lower()
-        if mode == 'no':
+        mode = (mode or 'none').lower()
+        if mode in ('no', 'none'):
             LOGGER.info('MM bonded terms of the QM region are left in the topology '
                         '(grompp removes them itself)')
             return
         if mode not in ('classic', 'amber'):
-            raise QMMMError(f'unknown mm_retention {mode!r}, use "no", "classic" or "amber"')
+            raise QMMMError(f'unknown mm_retention {mode!r}, use "none", "classic" or "amber"')
+        lj_scheme = (lj_scheme or 'exclude').lower()
+        if lj_scheme not in ('exclude', 'forcefield'):
+            raise QMMMError(f'unknown lj_scheme {lj_scheme!r}, use "forcefield" or "exclude"')
+        drop_boundary_pairs = mode == 'classic' and lj_scheme == 'exclude'
 
         angle_min, dihedral_min = (2, 3) if mode == 'classic' else (3, 4)
         mm1 = set(self.mm1_atoms)
@@ -1564,13 +1628,14 @@ class QM:
         if len(self.qm_mol.impropers):   # Gromacs keeps funct-4 impropers in .dihedrals
             self.qm_mol.impropers, removed['impropers'] = prune(self.qm_mol.impropers, 4, dihedral_min)
 
-        kept_pairs, gone_pairs = [], 0
+        kept_pairs, gone_pairs, gone_boundary = [], 0, 0
         for pair in self.qm_mol.adjusts:
             n_qm = self._n_qm(pair.atom1, pair.atom2)
-            boundary = mode == 'classic' and n_qm == 1 and (
+            boundary = drop_boundary_pairs and n_qm == 1 and (
                 pair.atom1.idx in mm1 or pair.atom2.idx in mm1)
             if n_qm == 2 or boundary:
                 gone_pairs += 1
+                gone_boundary += boundary
             else:
                 kept_pairs.append(pair)
         self.qm_mol.adjusts = pmd.TrackedList(kept_pairs)
@@ -1578,6 +1643,14 @@ class QM:
 
         LOGGER.info("mm_retention='%s' removed %s", mode,
                     ', '.join(f'{v} {k}' for k, v in removed.items() if v) or 'nothing')
+        if gone_boundary:
+            LOGGER.warning('%d of those 1-4 pairs join a QM atom and an MM1 atom '
+                           '(lj_scheme="exclude"). Run grompp with GMX_QMMM_LJ_SCHEME=exclude, '
+                           'which adds the LJ exclusions that belong to them, or pass '
+                           'lj_scheme="forcefield" to keep the pairs as grompp does by default.',
+                           gone_boundary)
+        elif mode == 'amber' and lj_scheme == 'exclude':
+            LOGGER.debug('lj_scheme has no effect with mm_retention="amber"')
 
     # =============================================================== link atoms
     def _link_atom_distance(self, aqm, amm):
@@ -1606,7 +1679,7 @@ class QM:
         self.qm_mol.add_atom(atom, 'XXX', res_n, chain='')
         return atom
 
-    def vs2_and_LA(self, link_la_to_mm1=True, link_la_to_mm2=False):
+    def vs2_and_LA(self, link_la_to_mm1=False, link_la_to_mm2=False):
         """Place a link atom on every QM/MM bond as a two-body virtual site.
 
         The site is a ``virtual_sites2`` of function type 2 ("2fd"): it lies on
@@ -1617,7 +1690,11 @@ class QM:
 
         The two flags add funct-5 bonds -- "connections" that carry no potential
         and exist only so that grompp generates exclusions around the link atom.
-        They are independent and can be combined freely:
+        Both are off by default: the link atom has neither charge nor LJ
+        parameters in the MM force field, and the QM/MM electrostatics of the
+        DFTB+ build do not look at exclusions, so they change nothing there.
+        A build that does use them (``GMX_QMMM_GRAD_EXCL``) needs them switched
+        on.  They are independent and can be combined freely:
 
         ``link_la_to_mm1``
             one bond to the MM atom the link atom caps.  With ``nrexcl = 3`` this
@@ -1692,33 +1769,113 @@ class QM:
                 if a.idx not in self.qm_idx and a.idx < self.n_input_atoms
                 and a.name not in ('LA', 'CP')]
 
-    def redistribute_boundary_charge(self, scheme):
-        """Deal with the charge of the MM boundary atom.
+    @staticmethod
+    def _scheme_name(scheme):
+        """``None``, ``'no'`` and ``'none'`` all mean "no scheme"; the rest in lower case."""
+        scheme = str(scheme or 'none').strip().lower()
+        return 'none' if scheme in ('no', 'none', '') else scheme
 
-        ``'no'``     keep it (the link atom then sits next to a full MM charge);
-        ``'amber'``  zero it and spread the charge over the MM acceptors;
-        ``'RC'``     zero it and put ``q/n`` on the midpoint of every MM1-MM2 bond;
-        ``'RCD'``    like RC but with ``2q/n`` on the midpoint and ``-q/n`` on MM2,
-                     which preserves the MM1-MM2 dipole;
-        ``'CS'``     charge shift: ``q/n`` onto MM2 plus a ``+q/n``/``-q/n`` pair
-                     around it, which preserves both charge and dipole.
+    @staticmethod
+    def _label(atom):
+        return f'{atom.residue.name}{atom.residue.number}:{atom.name}'
+
+    def boundary_problems(self, scheme='rc'):
+        """What stops a boundary charge scheme at this QM/MM boundary.
+
+        The rules are those of mdrun (``GMX_QMMM_POT_SCHEME``), which ends with a
+        fatal error on each of them.  For ``RC``, ``RCD`` and ``CS``: an MM1 atom
+        without an MM2 atom, an MM2 atom that is an MM1 atom itself, an MM2 atom
+        bonded to a QM atom.  For ``AMBER``: no MM atom left to take the charge.
+        Returns a list of messages, empty when the scheme can be used.
         """
-        scheme = (scheme or 'no').lower()
-        if scheme == 'no':
-            LOGGER.info('boundary charges are kept as they are (redistr_scheme="no")')
-            return
+        scheme = self._scheme_name(scheme)
+        problems = []
+        if scheme == 'none':
+            return problems
+        mm1_atoms = list(self._boundary_mm1_atoms())
+        mm1_idx = {atom.idx for atom in mm1_atoms}
         if scheme == 'amber':
-            return self.amber_redist()
-        if scheme == 'rc':
-            return self.RC_redist()
-        if scheme == 'rcd':
-            return self.RCD_redist()
-        if scheme == 'cs':
-            return self.CS_redist()
-        raise QMMMError(f'unknown redistr_scheme {scheme!r}, use "no", "amber", "RC", "RCD" or "CS"')
+            if mm1_atoms and not self._amber_receivers(mm1_idx):
+                problems.append('the molecule has no MM atom besides the MM1 atoms to spread '
+                                'their charge over')
+            return problems
+        for mm1 in mm1_atoms:
+            mm2_list = self._mm2_partners(mm1)
+            if not mm2_list:
+                problems.append(f'MM1 atom {self._label(mm1)} has no MM2 atom to take its charge')
+            for mm2 in mm2_list:
+                if mm2.idx in mm1_idx:
+                    problems.append(f'{self._label(mm2)} is an MM2 atom of {self._label(mm1)} '
+                                    'and an MM1 atom itself')
+                for partner in mm2.bond_partners:
+                    if partner.idx in self.qm_idx:
+                        problems.append(f'MM2 atom {self._label(mm2)} of {self._label(mm1)} is '
+                                        f'bonded to the QM atom {self._label(partner)}')
+        return problems
+
+    def _amber_receivers(self, mm1_idx):
+        """The atoms that share the MM1 charges in the AMBER scheme: every MM atom
+        of the molecule that is not an MM1 atom, as in mdrun."""
+        return [atom.idx for atom in self.qm_mol.atoms
+                if atom.idx < self.n_input_atoms and atom.idx not in self.qm_idx
+                and atom.idx not in mm1_idx]
+
+    def redistribute_boundary_charge(self, scheme='none'):
+        """Deal with the charge of the MM boundary atom (MM1) in the topology.
+
+        ``'none'``   keep it (``'no'`` is the older spelling).  This is the default
+                     and what the DFTB+ build expects: there the scheme is chosen
+                     at run time with ``GMX_QMMM_POT_SCHEME``, which changes only
+                     the QM--MM electrostatics and leaves the topology alone.
+        ``'amber'``  zero it and spread the MM1 charges evenly over all other MM
+                     atoms of the molecule;
+        ``'RC'``     zero it and put ``q0 = q/n`` on the midpoint of every MM1-MM2
+                     bond;
+        ``'RCD'``    like RC but with ``2 q0`` on the midpoint and ``-q0`` on MM2,
+                     which preserves the MM1-MM2 dipole;
+        ``'CS'``     charge shift: ``q0`` onto MM2 plus the pair ``+q0/0.12`` /
+                     ``-q0/0.12`` at 0.94 and 1.06 of the MM1-MM2 bond, which
+                     preserves both charge and dipole.
+
+        The charges and their positions are those of mdrun.  The difference is
+        where they act: written into the topology they are ordinary MM charges,
+        seen by the MM atoms as well as by the QM region, while
+        ``GMX_QMMM_POT_SCHEME`` shows them to the QM region only.  Setting both is
+        harmless -- mdrun then finds a zero charge on MM1 and adds nothing.
+
+        A boundary that mdrun would refuse (see :meth:`boundary_problems`) is
+        refused here as well.
+        """
+        scheme = self._scheme_name(scheme)
+        if scheme == 'none':
+            LOGGER.info('boundary charges are kept as they are (redistr_scheme="none"); '
+                        'a scheme for the QM-MM electrostatics alone is set at run time '
+                        'with GMX_QMMM_POT_SCHEME=RC|RCD|CS|AMBER')
+            problems = self.boundary_problems('rc')
+            if problems:
+                LOGGER.warning('mdrun will stop with GMX_QMMM_POT_SCHEME=RC, RCD or CS at this '
+                               'boundary: %s', '; '.join(problems[:5])
+                               + (f'; ... ({len(problems)} in all)' if len(problems) > 5 else ''))
+            return
+        if scheme not in ('amber', 'rc', 'rcd', 'cs'):
+            raise QMMMError(f'unknown redistr_scheme {scheme!r}, use "none", "amber", "RC", '
+                            '"RCD" or "CS"')
+        problems = self.boundary_problems(scheme)
+        if problems:
+            raise QMMMError(f'the {scheme.upper()} scheme cannot be used at this QM/MM boundary: '
+                            + '; '.join(problems[:5])
+                            + (f'; ... ({len(problems)} in all)' if len(problems) > 5 else '')
+                            + '. Move the boundary, or use redistr_scheme="none".')
+        LOGGER.info('redistr_scheme="%s" writes the scheme into the topology, where the MM atoms '
+                    'see it as well; to change the QM-MM electrostatics alone use '
+                    'redistr_scheme="none" and GMX_QMMM_POT_SCHEME=%s at run time',
+                    scheme.upper(), scheme.upper())
+        return {'amber': self.amber_redist, 'rc': self.RC_redist,
+                'rcd': self.RCD_redist, 'cs': self.CS_redist}[scheme]()
 
     def amber_redist(self):
-        """Zero the boundary charges and spread them over the MM acceptors."""
+        """Zero the MM1 charges and spread their sum evenly over all other MM atoms
+        of the molecule, the rule of ``GMX_QMMM_POT_SCHEME=AMBER``."""
         moved = 0.0
         boundary = set()
         atoms = self.qm_mol.atoms
@@ -1726,33 +1883,42 @@ class QM:
             moved += atoms[mm1.idx].charge
             atoms[mm1.idx].charge = 0.0
             boundary.add(mm1.idx)
-        acceptors = [i for i in self._charge_acceptors() if i not in boundary]
-        if not acceptors:
+        receivers = self._amber_receivers(boundary)
+        if not receivers:
             raise QMMMError('no MM atom left to accept the charge of the boundary atoms')
-        dq = moved / len(acceptors)
-        for i in acceptors:
+        dq = moved / len(receivers)
+        for i in receivers:
             atoms[i].charge += dq
-        LOGGER.info('amber scheme: %+.4f e taken from %d boundary atom(s) and spread over %d MM atoms',
-                    moved, len(boundary), len(acceptors))
+        LOGGER.info('amber scheme: %+.4f e taken from %d boundary atom(s) and spread over %d MM '
+                    'atoms (%+.2e e each)', moved, len(boundary), len(receivers), dq)
 
     def _redist_points(self, points, comment, label):
         """Shared machinery of RC / RCD / CS.
 
-        ``points(dq)`` returns ``(fraction along MM1->MM2, charge of the point,
-        charge added to MM2)`` triples.
+        ``points(q0)`` returns ``(fraction along MM1->MM2, charge of the point,
+        charge added to MM2)`` triples; ``q0`` is the MM1 charge divided by the
+        number of its MM2 atoms.
+
+        In mdrun these charges exist for the QM atoms only.  In a topology they
+        are MM charges a few hundredths of a nanometre from MM2 and from each
+        other, and their Coulomb interaction with those neighbours would be large
+        and would pull on the MM1-MM2 bond.  Every point is therefore excluded
+        from its own MM1 atom, the MM2 atoms of that MM1 and the other points
+        around it (:attr:`exclude_charge_points`); the QM/MM electrostatics take
+        no notice of exclusions, so the QM region still sees every charge.
         """
         res_n = len(self.qm_mol.residues)
         atom_n = len(self.qm_mol.atoms)
         xyz = self.qm_mol.coordinates
         atoms = self.qm_mol.atoms
         self.cp_idx = []
+        self.cp_exclusions = []
         moved, n_mm1 = 0.0, 0
         for mm1 in self._boundary_mm1_atoms():
             mm2_list = self._mm2_partners(mm1)
             if not mm2_list:
-                LOGGER.warning('boundary atom %s%d:%s has no MM neighbour, its charge is left alone',
-                               mm1.residue.name, mm1.residue.number, mm1.name)
-                continue
+                raise QMMMError(f'MM1 atom {self._label(mm1)} has no MM2 atom to take its charge')
+            first_point = atom_n
             charge = atoms[mm1.idx].charge
             dq = charge / len(mm2_list)
             atoms[mm1.idx].charge = 0.0
@@ -1768,8 +1934,17 @@ class QM:
                     self.cp_idx.append(atom_n)
                     res_n += 1
                     atom_n += 1
-        LOGGER.info('%s scheme: %+.4f e taken from %d boundary atom(s), %d charge point(s) created',
-                    label, moved, n_mm1, len(self.cp_idx))
+            if self.exclude_charge_points:
+                points_here = list(range(first_point, atom_n))
+                real = [mm1.idx] + [mm2.idx for mm2 in mm2_list]
+                for point in points_here:
+                    self.cp_exclusions.append(
+                        [point + 1] + [i + 1 for i in real]
+                        + [other + 1 for other in points_here if other != point])
+        LOGGER.info('%s scheme: %+.4f e taken from %d boundary atom(s), %d charge point(s) created%s',
+                    label, moved, n_mm1, len(self.cp_idx),
+                    ', each excluded from its MM1, MM2 and sibling points'
+                    if self.cp_exclusions else '')
 
     def RC_redist(self):
         self._redist_points(lambda dq: [(0.500, dq, 0.0)], '; RC', 'RC')
@@ -1777,8 +1952,17 @@ class QM:
     def RCD_redist(self):
         self._redist_points(lambda dq: [(0.500, 2 * dq, -dq)], '; RCD', 'RCD')
 
+    #: where the compensating pair of the charge-shift scheme sits on the MM1->MM2
+    #: line, in units of the bond length -- the values of mdrun
+    CS_FRACTIONS = (0.94, 1.06)
+
     def CS_redist(self):
-        self._redist_points(lambda dq: [(0.940, dq, dq), (1.060, -dq, 0.0)],
+        # q0 moves from MM1 onto MM2, which changes the dipole of the bond by
+        # q0*b; a pair +qp at f_minus and -qp at f_plus has the dipole
+        # qp*(f_minus - f_plus)*b, so qp = q0/(f_plus - f_minus) cancels it
+        f_minus, f_plus = self.CS_FRACTIONS
+        width = f_plus - f_minus
+        self._redist_points(lambda dq: [(f_minus, dq / width, dq), (f_plus, -dq / width, 0.0)],
                             '; charge shift', 'CS')
 
     # ================================================================== outputs
@@ -1904,6 +2088,12 @@ class QM:
             handle.write('    ' + '     '.join(f'{item:>{widths[i]}}'
                                                for i, item in enumerate(row)) + '\n')
         handle.write('\n')
+        if self.cp_exclusions:
+            handle.write('[ exclusions ]\n; charge point, its MM1 and MM2 atoms, '
+                         'the other points around that MM1\n')
+            for row in self.cp_exclusions:
+                handle.write(' '.join(f'{number:6d}' for number in row) + '\n')
+            handle.write('\n')
 
     def _rebuild_system_section(self):
         """``[ system ]`` unchanged plus a ``[ molecules ]`` with corrected counts.
@@ -2026,9 +2216,10 @@ class QM:
             passed on to :func:`write_hsd` / :func:`hamiltonian_block`:
             ``dftbplus_version``, ``sk_separator``, ``sk_suffix``,
             ``sk_lowercase``, ``scc_tolerance``, ``max_scc_iterations``,
-            ``mixer``, ``analysis``, ``options``, ``extra``.  Charged metal sites
-            often need ``mixer='anderson'``; DFTB+ 21.x-23.x needs
-            ``dftbplus_version=21``.
+            ``mixer``, ``solver``, ``analysis``, ``options``, ``extra``.  Charged
+            metal sites often need ``mixer='anderson'``; DFTB+ 21.x-23.x needs
+            ``dftbplus_version=21``; with Intel MKL ``solver='DivideAndConquer'``
+            is the fastest eigensolver.
         """
         if charge is None:
             charge = self.aim_qm_charge
@@ -2101,9 +2292,44 @@ class QM:
         return True
 
     # ===================================================================== run
-    def job(self, qm_aim_charge=None, mm_retention='no', redistr_scheme='no',
-            link_la_to_mm1=True, link_la_to_mm2=False, charge_rounding=None):
+    def check_force_field(self):
+        """Warn when the force field does not describe the massless sites.
+
+        A link atom (type ``LA``) and a charge point (type ``CP``) need an
+        ``[ atomtypes ]`` entry, and grompp of the DFTB+ build generates no LJ
+        exclusions for a link atom, so its LJ parameters have to be zero.
+        """
+        types = getattr(getattr(self.itop, 'parameterset', None), 'atom_types', None)
+        if not types:
+            return
+        used = [name for name, sites in (('LA', self.la_idx), ('CP', self.cp_idx)) if sites]
+        for name in used:
+            entry = types.get(name)
+            if entry is None:
+                LOGGER.warning('the force field has no atom type %s; add it to [ atomtypes ] '
+                               'with zero mass and zero LJ parameters, e.g. '
+                               '"%s  1  0.0000  0.0000  A  0.0  0.0"', name, name)
+            elif abs(getattr(entry, 'epsilon', 0.0) or 0.0) > 1e-12:
+                LOGGER.warning('atom type %s has non-zero LJ parameters (epsilon %g); grompp '
+                               'generates no LJ exclusions for it, set them to zero',
+                               name, entry.epsilon)
+
+    def check_box(self):
+        """The QM/MM virial of the DFTB+ build is right for rectangular boxes only."""
+        box = getattr(self.itop, 'box', None)
+        if box is not None and any(abs(angle - 90.0) > 1e-4 for angle in box[3:6]):
+            LOGGER.warning('the box is triclinic (angles %.2f %.2f %.2f): the QM/MM virial of '
+                           'the DFTB+ build is correct for rectangular boxes only, so do not '
+                           'use pressure coupling with it', *box[3:6])
+
+    def job(self, qm_aim_charge=None, mm_retention='none', redistr_scheme='none',
+            link_la_to_mm1=False, link_la_to_mm2=False, charge_rounding=None,
+            lj_scheme=None):
         """Build the QM/MM system and write the topology, coordinates and index file.
+
+        The defaults leave the boundary to GROMACS: grompp removes the bonded
+        terms (``GMX_QMMM_BONDED_SCHEME``, ``GMX_QMMM_LJ_SCHEME``) and mdrun
+        applies the boundary charge scheme (``GMX_QMMM_POT_SCHEME``).
 
         Parameters
         ----------
@@ -2114,26 +2340,35 @@ class QM:
             fractional part at which the derived charge rounds up in magnitude;
             0.25 by default, 0.5 is ordinary rounding.  See
             :meth:`detect_qm_charge`.
-        mm_retention : {'no', 'classic', 'amber'}
+        mm_retention : {'none', 'classic', 'amber'}
             whether the MM bonded terms of the QM region are already removed from
-            the written topology, see :meth:`process_mm_terms`.
-        redistr_scheme : {'no', 'amber', 'RC', 'RCD', 'CS'}
-            what happens to the charge of the MM boundary atoms, see
-            :meth:`redistribute_boundary_charge`.
+            the written topology, see :meth:`process_mm_terms`.  ``'no'`` is
+            accepted for ``'none'``.
+        lj_scheme : {'exclude', 'forcefield'}, optional
+            with ``mm_retention='classic'``: whether the 1-4 pairs between a QM
+            atom and an MM1 atom are removed (``'exclude'``, also when left out)
+            or kept (``'forcefield'``, the default of grompp).
+        redistr_scheme : {'none', 'amber', 'RC', 'RCD', 'CS'}
+            what happens to the charge of the MM boundary atoms in the topology,
+            see :meth:`redistribute_boundary_charge`.  ``'no'`` is accepted for
+            ``'none'``.
         link_la_to_mm1, link_la_to_mm2 : bool
             funct-5 connections from each link atom to its MM1 atom and to the
             MM2 atoms behind it, so that grompp generates the exclusions around
-            the link atom.  The two work independently, see :meth:`vs2_and_LA`.
+            the link atom.  Both off by default; the two work independently, see
+            :meth:`vs2_and_LA`.
         """
         self.determine_qm()
         self.calculate_charge_qm()
         self.redistribute_charge_from_qm_to_mm(aim_charge=qm_aim_charge,
                                                rounding=charge_rounding)
         self.find_qmmm_bonds()
-        self.process_mm_terms(mm_retention)
+        self.process_mm_terms(mm_retention, lj_scheme=lj_scheme)
         self.process_bonds()
         self.vs2_and_LA(link_la_to_mm1=link_la_to_mm1, link_la_to_mm2=link_la_to_mm2)
         self.redistribute_boundary_charge(redistr_scheme)
+        self.check_force_field()
+        self.check_box()
         self.write_outputs()
         LOGGER.info('done: total charge of the written system %+.4f e', self.full_charge())
         return self

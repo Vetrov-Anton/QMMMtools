@@ -6,7 +6,7 @@ that are guaranteed to describe the same atoms in the same order:
 
 | file | content |
 |---|---|
-| `qm.top` | QM–QM bonds turned into connections (`funct 5`), link atoms and charge points as `[ virtual_sites2 ]`, adjusted charges, corrected `[ molecules ]` |
+| `qm.top` | QM–QM bonds turned into connections (`funct 5`), link atoms as `[ virtual_sites2 ]`, adjusted charges, corrected `[ molecules ]` |
 | `qm.gro` | coordinates **in the topology's atom order**, velocities preserved |
 | `qm.ndx` | `[ QM ]` (QM atoms + link atoms), `[ Biomolecule ]`, `[ Water_and_ions ]`, `[ System ]` |
 | `dftb_in.hsd` | DFTB+/xTB input with the QM atoms **in the same order as `[ QM ]`** |
@@ -275,26 +275,61 @@ N 1.01 Å, O 0.97 Å, S 1.34 Å. Anything else stretches or compresses a real bo
 the QM calculation.
 
 Two independent flags add `funct 5` bonds around the link atom — "connections" that carry
-no potential and exist only so that grompp generates exclusions from them:
+no potential and exist only so that grompp generates exclusions from them. **Both are off by
+default.** The link atom has neither a charge nor LJ parameters in the force field, and the
+QM/MM electrostatics of the DFTB+ build do not look at exclusions, so there they change
+nothing (the energies of a test run were identical with and without them); a build that
+does use the exclusions needs them switched on.
 
 | flag | effect |
 |---|---|
-| `link_la_to_mm1=True` (default) | one bond to the MM atom the link atom caps; with `nrexcl = 3` this already excludes the link atom from everything within three bonds of MM1 |
-| `link_la_to_mm2=False` | one bond to each further MM neighbour of MM1, pushing the exclusion shell one bond further out |
+| `link_la_to_mm1=False` (default) | `True` adds one bond to the MM atom the link atom caps; with `nrexcl = 3` this excludes the link atom from everything within three bonds of MM1 |
+| `link_la_to_mm2=False` (default) | `True` adds one bond to each further MM neighbour of MM1, pushing the exclusion shell one bond further out |
 
-On the command line: `--no-link-bond` turns the first off, `--link-la-to-mm2` turns the
-second on. They can be combined in any way.
+On the command line: `--link-la-to-mm1` and `--link-la-to-mm2`. They can be combined in any
+way. (`--no-link-bond` is still accepted and now states the default.)
 
-What happens to the charge of the MM boundary atom is `redistr_scheme`
-(`--redistr-scheme`):
+### The charge of the MM boundary atom
 
-| value | effect |
+The link atom sits about 1 Å from MM1, so the full charge of MM1 next to it overpolarises
+the QM region. A boundary charge scheme removes that charge and puts it somewhere else.
+There are two places to do it, and **the DFTB+ build does it at run time**:
+
+| | where | who sees the redistributed charges |
+|---|---|---|
+| `GMX_QMMM_POT_SCHEME=RC\|RCD\|CS\|AMBER` for mdrun | QM–MM electrostatics only | the QM region; the MM–MM interactions keep the force-field charges |
+| `redistr_scheme` here | written into the topology | the QM region **and** every MM atom |
+
+So the default is `redistr_scheme='none'` (`--redistr-scheme none`): the topology is left
+alone and the scheme is chosen with the environment variable when mdrun starts.
+
+| value | effect, with `q0 = q(MM1)/n` and `n` the number of MM2 atoms of that MM1 |
 |---|---|
-| `'no'` (default) | left as it is |
-| `'amber'` | zeroed, spread over the MM acceptors |
-| `'RC'` | zeroed, `q/n` on the midpoint of each MM1–MM2 bond |
-| `'RCD'` | as RC but `2q/n` on the midpoint and `−q/n` on MM2 — keeps the dipole |
-| `'CS'` | charge shift: `q/n` onto MM2 plus a `±q/n` pair around it |
+| `'none'` (default; `'no'` means the same) | left as it is |
+| `'amber'` | zeroed; the MM1 charges are spread evenly over all other MM atoms of the molecule |
+| `'RC'` | zeroed, `q0` on the midpoint of each MM1–MM2 bond |
+| `'RCD'` | as RC but `2·q0` on the midpoint and `−q0` on MM2 — keeps the dipole |
+| `'CS'` | charge shift: `q0` onto MM2 plus the pair `+q0/0.12` / `−q0/0.12` at 0.94 and 1.06 of the MM1–MM2 bond — keeps charge and dipole |
+
+The charges and their positions are exactly those mdrun uses for the same scheme (checked
+against `qmmm_redistribution_report.txt`, atom by atom). Three things follow from writing
+them into a topology instead:
+
+* they are ordinary MM charges, so the MM–MM electrostatics change as well — tens to about a hundred kJ/mol
+  on a protein with ten link atoms;
+* each charge point is excluded from its own MM1 atom, the MM2 atoms of that MM1 and the
+  other points around it (`[ exclusions ]`). The points lie a few hundredths of a nanometre
+  from MM2 and from each other, and without the exclusions their Coulomb interaction with
+  those neighbours is large and pulls on the MM1–MM2 bond. `qm.exclude_charge_points = False`
+  writes none;
+* setting `GMX_QMMM_POT_SCHEME` on top of it is harmless: mdrun finds a zero charge on MM1
+  and adds nothing.
+
+A scheme needs a boundary it can work with. mdrun stops when an MM1 atom has no MM2 atom,
+when an MM2 atom is an MM1 atom itself, or when an MM2 atom is bonded to a QM atom (`RC`,
+`RCD`, `CS`). The same rules are checked here: with `redistr_scheme='none'` they give a
+warning that names the atoms, with a scheme they are an error. `qm.boundary_problems('RC')`
+returns the list.
 
 ## MM bonded terms inside the QM region
 
@@ -303,11 +338,22 @@ written topology:
 
 | value | effect |
 |---|---|
-| `'no'` (default) | left in — grompp of this build removes them itself and prints a table of what it removed |
-| `'classic'` | grompp's own rule: a term goes once all but one of its atoms are QM; also drops the 1-4 pairs between a QM atom and a bonded MM atom |
+| `'none'` (default; `'no'` means the same) | left in — grompp of this build removes them itself and lists every removed term in `qmmm_topology_report.txt` |
+| `'classic'` | the default rule of grompp: a term goes once all but one of its atoms are QM |
 | `'amber'` | only terms whose atoms are *all* QM |
 
-`'classic'`/`'amber'` also pre-empt `GMX_QMMM_BONDED_SCHEME`.
+grompp applies its own scheme (`GMX_QMMM_BONDED_SCHEME=classic|amber`) to whatever is left,
+so stripping here cannot keep a term that grompp removes: `'amber'` here still needs
+`GMX_QMMM_BONDED_SCHEME=amber` there. And what was stripped here is missing from the report
+of grompp. Prefer `'none'` and the environment variable.
+
+With `'classic'`, `lj_scheme` (`--lj-scheme`) says what happens to the 1-4 pairs between a QM
+atom and an MM1 atom — the counterpart of `GMX_QMMM_LJ_SCHEME`:
+
+| value | effect |
+|---|---|
+| `'exclude'` (also when left out) | removed, as this module always did. Run grompp with `GMX_QMMM_LJ_SCHEME=exclude`, which adds the LJ exclusions that belong to them |
+| `'forcefield'` | kept — the default of grompp |
 
 **QM–QM bonds are always converted to `funct 5`**, independent of `mm_retention`. This is
 not cosmetic: left as `funct 1` they are turned into constraints by `constraints = h-bonds`
@@ -319,7 +365,7 @@ not cosmetic: left as `funct 1` they are turned into constraints by `constraints
 ```bash
 gmx grompp -f qm.mdp -c qm.gro -p qm.top -n qm.ndx -o qm.tpr
 
-GMX_QMMM_NREXCL=3 GMX_QMMM_VARIANT=1 gmx mdrun -deffnm qm
+GMX_QMMM_VARIANT=1 GMX_QMMM_POT_SCHEME=CS gmx mdrun -deffnm qm -ntomp 8 -pin on
 ```
 
 with an `.mdp` containing
@@ -329,13 +375,35 @@ QMMM      = yes
 QMMM-grps = QM
 QMmethod  = RHF        ; grompp insists on a value, this build ignores it
 QMbasis   = STO-3G     ; likewise
-QMcharge  = -2         ; must equal Charge in dftb_in.hsd
+QMcharge  = -2         ; keep it equal to Charge in dftb_in.hsd
 QMmult    = 1
 ```
 
-`dftb_in.hsd` must sit in the run directory. mdrun reads it once and then overwrites the
-coordinates every step, so the *numbers* in `Geometry` do not matter for the run — but the
-atom **count** and **order** do.
+The environment variables of the build (GROMACS 2026 with the DFTB+ interface of Kubař
+*et al.*, [gmx_dftbp_omp](https://github.com/Vetrov-Anton/gmx_dftbp_omp)):
+
+| variable | read by | meaning |
+|---|---|---|
+| `GMX_QMMM_VARIANT` | mdrun | QM–MM electrostatics: `1` PME, `2` switched cut-off, `3` reaction field, `4` shifted cut-off. **Unset means `0`: no QM–MM electrostatics at all** |
+| `GMX_QMMM_POT_SCHEME` | mdrun | boundary charge scheme `none` (default), `RC`, `RCD`, `CS`, `AMBER` — see [above](#the-charge-of-the-mm-boundary-atom) |
+| `GMX_QMMM_BONDED_SCHEME` | grompp | `classic` (default) or `amber`, the bonded terms across the boundary |
+| `GMX_QMMM_LJ_SCHEME` | grompp | `forcefield` (default) or `exclude`, the LJ between the QM atoms and MM1 |
+| `GMX_QMMM_REPORTS` | both | `off` suppresses `qmmm_topology_report.txt` and `qmmm_redistribution_report.txt` |
+
+The run uses one MPI rank; all the parallelism is OpenMP (`-ntomp`).
+
+`dftb_in.hsd` must sit in the run directory. mdrun reads it once: the **number** of QM atoms
+and their **elements** come from its `Geometry` block (with a DFTB+ release, 21.x–25.x), so
+the block has to list the atoms in the order of the `[ QM ]` group. The coordinates in it
+do not matter — mdrun passes its own every step. Only the atom count is checked at start,
+so run `qmmmtools check` when in doubt. The charge of the QM region is the `Charge` of the
+`.hsd` as well; `QMcharge` in the `.mdp` is not passed to DFTB+, but keep the two equal.
+
+The link atoms need an atom type `LA` (and the charge points of `redistr_scheme` a type
+`CP`) with zero mass and zero LJ parameters in `[ atomtypes ]` — grompp generates no LJ
+exclusions for a link atom. A missing type or non-zero LJ parameters are reported during
+preparation. So is a triclinic box: the QM/MM virial of the build is right for rectangular
+boxes only.
 
 ### The index groups
 
@@ -461,6 +529,23 @@ existing input moves between the two by rewriting that one keyword:
 qmmmtools rewrite-hsd dftb_in.hsd --dftbplus-version 21
 ```
 
+### Eigensolver
+
+```python
+qm.make_hsd('dftb_in.hsd', skpath=SKPATH, solver='DivideAndConquer')
+```
+
+```bash
+qmmmtools prepare ... --hsd --solver DivideAndConquer
+qmmmtools rewrite-hsd dftb_in.hsd --solver DivideAndConquer
+```
+
+`solver` (`--solver`) writes `Solver = ... {}` into the Hamiltonian: `'DivideAndConquer'`,
+`'RelativelyRobust'`, `'QR'`, or any HSD text such as `'Solver = MAGMA {}'`. Left out, the
+keyword is not written and DFTB+ uses RelativelyRobust. With Intel MKL DivideAndConquer is
+the fastest — 200 against 230 ms per MD step on a 109-atom QM region on 8 threads — and the
+energies are the same.
+
 ### SCC convergence
 
 ```python
@@ -492,6 +577,7 @@ for byte, so hand-tuned settings survive:
 ```python
 qm.rewrite_hsd('dftb_in.hsd')                                   # coordinates only
 qm.rewrite_hsd('dftb_in.hsd', charge=-3, mixer='anderson')      # + settings
+qm.rewrite_hsd('dftb_in.hsd', geometry=False, solver='DivideAndConquer')   # eigensolver
 qm.rewrite_hsd('dftb_in.hsd', method='gfn2-xtb', charge=-2)     # swap the Hamiltonian
 qm.rewrite_hsd('dftb_in.hsd', skpath='/new/3ob/', sk_format='spl')   # other SK files
 qm.rewrite_hsd('dftb_in.hsd', blocks={'Driver': 'Driver = {}'}) # any top-level block

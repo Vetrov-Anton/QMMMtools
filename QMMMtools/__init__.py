@@ -24,11 +24,11 @@ from .core import (QM, QMGeometry, QMMMError, HsdFile, set_log_level, LOGGER,
                    write_gro, gro_box_line, convert_to_gro,
                    analysis_block, forces_keyword, parse_dftbplus_version,
                    ANALYSIS_BLOCK, OPTIONS_BLOCK, DEFAULT_DFTBPLUS_VERSION,
-                   DEFAULT_SCC_TOLERANCE, DEFAULT_MAX_SCC_ITERATIONS)
+                   DEFAULT_SCC_TOLERANCE, DEFAULT_MAX_SCC_ITERATIONS, SOLVERS)
 from .data import (QMMethod, QM_METHODS, DEFAULT_QM_METHOD,
                    SKFormat, SK_FORMATS, DEFAULT_SK_FORMAT, sk_file_name)
 
-__version__ = '1.8.0'
+__version__ = '1.9.0'
 
 __all__ = [
     'QM', 'QMGeometry', 'QMMMError', 'HsdFile', 'QMMethod', 'SKFormat',
@@ -40,6 +40,7 @@ __all__ = [
     'analysis_block', 'forces_keyword', 'parse_dftbplus_version',
     'ANALYSIS_BLOCK', 'OPTIONS_BLOCK', 'DEFAULT_DFTBPLUS_VERSION',
     'DEFAULT_SCC_TOLERANCE', 'DEFAULT_MAX_SCC_ITERATIONS',
+    'SOLVERS',
     'QM_METHODS', 'DEFAULT_QM_METHOD',
     'SK_FORMATS', 'DEFAULT_SK_FORMAT', 'sk_file_name',
     'data', '__version__',

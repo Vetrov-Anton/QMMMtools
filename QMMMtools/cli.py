@@ -30,6 +30,13 @@ def _rounding(text):
     except QMMMError as error:
         raise argparse.ArgumentTypeError(str(error)) from None
 
+
+def _scheme(text):
+    """argparse type: the boundary charge schemes, whatever the case."""
+    key = text.strip().lower()
+    return key if key in ('none', 'no', 'amber') else key.upper()
+
+
 BOND_PRESETS = {
     'protein': (data.PROTEIN_BREAKABLE_BONDS, data.PROTEIN_H_DIST),
     'nucleic': (data.NUCLEIC_BREAKABLE_BONDS, data.NUCLEIC_H_DIST),
@@ -66,6 +73,9 @@ def _add_hsd_options(parser, with_method_default=False):
                            DEFAULT_MAX_SCC_ITERATIONS))
     group.add_argument('--mixer', help='"anderson" (recommended for charged metal sites), '
                                        '"broyden", or a raw HSD block')
+    group.add_argument('--solver', metavar='NAME',
+                       help='eigensolver: DivideAndConquer (the fastest with Intel MKL), '
+                            'RelativelyRobust, QR, or a raw HSD block (default: left to DFTB+)')
     group.add_argument('--dftbplus-version', metavar='V',
                        help='DFTB+ release the input is written for: 24.1 and later spell '
                             'the Analysis switch "PrintForces", 21.x-23.x "CalculateForces" '
@@ -118,14 +128,25 @@ def build_parser():
                        help='fractional part at which the derived charge rounds up in '
                             'magnitude: 0.25 by default (1.43 -> 2, 0.04 -> 0), 0.5 or '
                             '"nearest" for ordinary rounding, 0 or "away" to always round up')
-    setup.add_argument('--mm-retention', choices=('no', 'classic', 'amber'), default='no',
+    setup.add_argument('--mm-retention', choices=('none', 'no', 'classic', 'amber'),
+                       default='none',
                        help='strip the MM bonded terms of the QM region from the topology '
-                            '(default: no, grompp does it itself)')
-    setup.add_argument('--redistr-scheme', default='no',
-                       choices=('no', 'amber', 'RC', 'RCD', 'CS'),
-                       help='what happens to the charge of the MM boundary atoms')
+                            '(default: none, grompp does it itself; "no" means the same)')
+    setup.add_argument('--lj-scheme', choices=('exclude', 'forcefield'),
+                       help='with --mm-retention classic: remove the 1-4 pairs between a QM '
+                            'atom and an MM1 atom (exclude, the default; goes with '
+                            'GMX_QMMM_LJ_SCHEME=exclude at grompp) or keep them (forcefield)')
+    setup.add_argument('--redistr-scheme', default='none', type=_scheme,
+                       choices=('none', 'no', 'amber', 'RC', 'RCD', 'CS'),
+                       help='write a boundary charge scheme into the topology (default: none; '
+                            '"no" means the same). The DFTB+ build applies a scheme to the '
+                            'QM-MM electrostatics alone at run time, with GMX_QMMM_POT_SCHEME')
+    setup.add_argument('--link-la-to-mm1', action='store_true',
+                       help='connect each link atom to its MM1 atom (funct 5), so that grompp '
+                            'generates exclusions around it (default: off)')
     setup.add_argument('--no-link-bond', action='store_true',
-                       help='do not connect the link atoms to their MM1 atom (funct 5)')
+                       help='the opposite of --link-la-to-mm1; kept for older scripts, this is '
+                            'the default now')
     setup.add_argument('--link-la-to-mm2', action='store_true',
                        help='also connect each link atom to the MM2 atoms behind its MM1 '
                             'atom (funct 5), widening the exclusion shell')
@@ -223,6 +244,7 @@ def _hsd_kwargs(args):
                'sk_separator': args.sk_separator, 'sk_suffix': args.sk_suffix,
                'sk_lowercase': args.sk_lowercase,
                'scc_tolerance': args.scc_tolerance, 'mixer': args.mixer,
+               'solver': args.solver,
                'max_scc_iterations': args.max_scc_iterations,
                'dftbplus_version': args.dftbplus_version}
     return {key: value for key, value in mapping.items() if value is not None}
@@ -248,9 +270,12 @@ def cmd_prepare(args):
         solvent = ':' + ','.join(sorted(qm.solvent_and_ions & data.WATER_RESIDUES))
         qm.choose_qm_manually(f'(({qm.qm_input_mask})<:{args.solvate})&({solvent})')
 
+    if args.link_la_to_mm1 and args.no_link_bond:
+        raise QMMMError('--link-la-to-mm1 and --no-link-bond contradict each other')
     qm.job(qm_aim_charge=args.charge, mm_retention=args.mm_retention,
-           redistr_scheme=args.redistr_scheme, link_la_to_mm1=not args.no_link_bond,
-           link_la_to_mm2=args.link_la_to_mm2, charge_rounding=args.charge_rounding)
+           redistr_scheme=args.redistr_scheme, link_la_to_mm1=args.link_la_to_mm1,
+           link_la_to_mm2=args.link_la_to_mm2, charge_rounding=args.charge_rounding,
+           lj_scheme=args.lj_scheme)
 
     hsd = None
     if args.hsd is not None:
@@ -263,7 +288,11 @@ def cmd_prepare(args):
     print(f'QM charge : {qm.aim_qm_charge:+d}   '
           f'(force field: {qm.qm_charge:+.4f})')
     print(f'written   : {top}, {gro}, {ndx}' + (f', {hsd}' if hsd else ''))
-    print(f'\nremember to set QMcharge = {qm.aim_qm_charge} in the .mdp')
+    print(f'\nthe QM charge is the Charge of the .hsd; set QMcharge = {qm.aim_qm_charge} '
+          'in the .mdp to match it')
+    print('run mdrun with GMX_QMMM_VARIANT=1 (PME; unset means no QM-MM electrostatics)'
+          + ('' if qm.cp_idx or str(args.redistr_scheme).lower() == 'amber' else
+             ', and GMX_QMMM_POT_SCHEME=RC|RCD|CS|AMBER for a boundary charge scheme'))
     return 0
 
 
