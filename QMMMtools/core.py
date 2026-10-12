@@ -7,7 +7,7 @@ GROMACS/DFTB+ build needs:
 * ``*.top``  -- the QM/MM topology: QM-QM bonds turned into connections, link
   atoms and charge points added as ``[ virtual_sites2 ]``, charges adjusted;
 * ``*.gro``  -- coordinates in exactly the same atom order as the topology;
-* ``*.ndx``  -- the ``[ QM ]`` group (QM atoms + link atoms) and two helper groups;
+* ``*.ndx``  -- the ``[ QM ]`` group (QM atoms + link atoms) and the helper groups;
 * ``dftb_in.hsd`` -- the DFTB+/xTB input, with the QM atoms in the same order.
 
 Typical use::
@@ -1999,6 +1999,13 @@ class QM:
         that an ``.mdp`` written against the older name keeps working.  The three
         original groups stay in their original positions as well, which keeps the
         numbering that ``gmx trjconv`` and friends read from a pipe intact.
+
+        ``[ QM_no_LA ]``
+            the QM atoms without the link atoms -- the group to name in
+            ``freezegrps`` when the MM surroundings are to be relaxed around a
+            fixed QM region.  Link atoms are virtual sites and follow their two
+            constructing atoms, so they are left out.  It comes after
+            ``[ freeze ]`` for the same numbering reason.
         """
         n_qm_mol = len(self.qm_mol.atoms)
         n_total = n_qm_mol + len(self.rest.atoms)
@@ -2010,6 +2017,7 @@ class QM:
             self._print_group(handle, 'System', list(range(1, n_total + 1)))
             handle.write('; the former name of [ Biomolecule ], kept for older .mdp files\n')
             self._print_group(handle, 'freeze', biomolecule)
+            self._print_group(handle, 'QM_no_LA', [i + 1 for i in sorted(self.qm_idx)])
         LOGGER.info('wrote %s ([ QM ] = %d atoms, [ Biomolecule ] = %d, '
                     '[ Water_and_ions ] = %d)', self.file_ondx, len(self.qm_group_idx),
                     n_qm_mol, n_total - n_qm_mol)

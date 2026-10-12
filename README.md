@@ -8,7 +8,7 @@ that are guaranteed to describe the same atoms in the same order:
 |---|---|
 | `qm.top` | QM–QM bonds turned into connections (`funct 5`), link atoms as `[ virtual_sites2 ]`, adjusted charges, corrected `[ molecules ]` |
 | `qm.gro` | coordinates **in the topology's atom order**, velocities preserved |
-| `qm.ndx` | `[ QM ]` (QM atoms + link atoms), `[ Biomolecule ]`, `[ Water_and_ions ]`, `[ System ]` |
+| `qm.ndx` | `[ QM ]` (QM atoms + link atoms), `[ Biomolecule ]`, `[ Water_and_ions ]`, `[ System ]`, `[ QM_no_LA ]` |
 | `dftb_in.hsd` | DFTB+/xTB input with the QM atoms **in the same order as `[ QM ]`** |
 
 NOTE: all ligands should be introduced directly into forcefield as .rtps (NOT .itps) !!!
@@ -413,6 +413,7 @@ boxes only.
 | `Biomolecule` | the whole rewritten moleculetype — the protein or nucleic acid together with everything quantum: ligands, cofactors, metals, link atoms, and any solvent taken into the QM region |
 | `Water_and_ions` | the bulk that was left untouched |
 | `System` | everything |
+| `QM_no_LA` | the QM atoms **without the link atoms** |
 
 `Biomolecule` and `Water_and_ions` are the natural pair for temperature coupling and for
 trajectory output — the interesting part of the system against the bath around it:
@@ -430,7 +431,21 @@ you want the quantum atoms themselves.
 
 A group named `freeze` with the atoms of `Biomolecule` is written at the end of the file so
 that an older `.mdp` keeps working; the first three groups also keep their positions, so
-selecting a group by number from a pipe still means what it did.
+selecting a group by number from a pipe still means what it did. `QM_no_LA` follows `freeze`
+for the same reason.
+
+`QM_no_LA` is the group to freeze. Steepest descent takes one step size for the whole system,
+and while the solvent of an MD snapshot is still far from its minimum the total energy keeps
+falling even when a stiff bond of the QM region is overshot further on every step — the QM
+region is torn apart and the SCC stops converging. Relax the surroundings first:
+
+```
+freezegrps = QM_no_LA
+freezedim  = Y Y Y
+```
+
+and minimise the whole system from the result without these two lines. The link atoms are
+virtual sites that follow their constructing atoms, which is why they are not in the group.
 
 ---
 
