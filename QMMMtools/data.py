@@ -91,8 +91,8 @@ def residue_mask(names):
 
 
 #: Backbone atom names of an amino acid, in the Gromacs (HA1/HA2, OC1/OC2),
-#: Amber (HA2/HA3, OXT) and CHARMM (HN, OT1/OT2) spellings.  Everything else in
-#: an amino acid is side chain, which is why only this side is enumerated.
+#: Amber (HA2/HA3, OXT) and CHARMM (HN, OT1/OT2) spellings.  Everything else is
+#: side chain, which is why only this side is enumerated.
 PROTEIN_BACKBONE_ATOMS = frozenset({
     'N', 'H', 'HN', 'H1', 'H2', 'H3',          # amide / N-terminal hydrogens
     'CA', 'HA', 'HA1', 'HA2', 'HA3',           # alpha carbon and its hydrogens
@@ -116,16 +116,21 @@ AMINO_ACID_MASK = residue_mask(AMINO_ACIDS)
 #: ``':DA,DC,...'`` -- every residue name the module treats as a nucleotide
 NUCLEIC_ACID_MASK = residue_mask(NUCLEIC_ACIDS)
 
-#: the backbone / sugar-phosphate names on their own, unrestricted by residue
+#: the backbone / sugar-phosphate names on their own
 PROTEIN_BACKBONE_ATOM_MASK = atom_mask(PROTEIN_BACKBONE_ATOMS)
 NUCLEIC_BACKBONE_ATOM_MASK = atom_mask(NUCLEIC_BACKBONE_ATOMS)
 
-#: side chains of the amino acids -- the residue part matters, because a bare
-#: negation of the backbone names would take in water, ions and every ligand
-PROTEIN_SIDECHAIN_MASK = f'({AMINO_ACID_MASK})&(!{PROTEIN_BACKBONE_ATOM_MASK})'
-#: backbone of the amino acids
-PROTEIN_BACKBONE_MASK = f'({AMINO_ACID_MASK})&({PROTEIN_BACKBONE_ATOM_MASK})'
-#: everything that is not an amino-acid side chain: backbone, solvent, ligands
+#: The backbone by atom name alone.  No residue names: matching every atom
+#: against the hundred-odd residue names of ``AMINO_ACID_MASK`` is what made a
+#: selection slow on a solvated system.  The price is that the names are not
+#: specific to amino acids -- a ligand atom called ``C``, ``O`` or ``H1`` matches
+#: too -- so combine the mask with the residues that are meant: ``(:60,129)&(...)``.
+PROTEIN_BACKBONE_MASK = PROTEIN_BACKBONE_ATOM_MASK
+#: Side chains: the plain negation of the backbone names.  On its own it takes
+#: in water, ions and ligands as well, so it too is meant to be combined with
+#: residues.
+PROTEIN_SIDECHAIN_MASK = f'!({PROTEIN_BACKBONE_MASK})'
+#: the negation of the side-chain mask, which is the backbone names again
 NOT_PROTEIN_SIDECHAIN_MASK = f'!({PROTEIN_SIDECHAIN_MASK})'
 
 #: bases of the nucleotides, and the sugar-phosphate backbone

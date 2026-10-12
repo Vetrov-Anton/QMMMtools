@@ -167,25 +167,31 @@ to be typed out:
 ```python
 from QMMMtools import data
 
-qm.choose_qm_manually(f'({data.PROTEIN_SIDECHAIN_MASK})&(:HIS)')       # side chains of every His
-qm.choose_qm_manually(f'({data.PROTEIN_SIDECHAIN_MASK})&(:ARG,LYS)')   # of Arg and Lys
-qm.choose_qm_to_extend(f'({data.PROTEIN_BACKBONE_MASK})&(:167-169)')   # a stretch of backbone
+qm.choose_qm_manually(f'(:HIS)&({data.PROTEIN_SIDECHAIN_MASK})')       # side chains of every His
+qm.choose_qm_manually(f'(:ARG,LYS)&({data.PROTEIN_SIDECHAIN_MASK})')   # of Arg and Lys
+qm.choose_qm_to_extend(f'(:167-169)&({data.PROTEIN_BACKBONE_MASK})')   # a stretch of backbone
 ```
 
 | mask | selects |
 |---|---|
-| `PROTEIN_SIDECHAIN_MASK` | side chains of the amino acids |
-| `NOT_PROTEIN_SIDECHAIN_MASK` | its negation: backbone, solvent, ions, ligands |
-| `PROTEIN_BACKBONE_MASK` | backbone of the amino acids |
-| `PROTEIN_BACKBONE_ATOM_MASK` | just the names, `@C,CA,H,...`, unrestricted by residue |
+| `PROTEIN_BACKBONE_MASK` | the backbone atom names, `@C,CA,H,...` — no residue names |
+| `PROTEIN_SIDECHAIN_MASK` | its negation, `!(@C,CA,H,...)` |
+| `NOT_PROTEIN_SIDECHAIN_MASK` | the negation of that, i.e. the backbone names again |
+| `PROTEIN_BACKBONE_ATOM_MASK` | the same string as `PROTEIN_BACKBONE_MASK` |
 | `NUCLEIC_BASE_MASK`, `NUCLEIC_BACKBONE_MASK`, `NOT_NUCLEIC_BASE_MASK` | the same split for nucleotides: base against sugar-phosphate |
 | `AMINO_ACID_MASK`, `NUCLEIC_ACID_MASK` | `:ALA,ARG,…` and `:DA,DC,…` |
 
 Only the **backbone** is enumerated by name — twenty names covering the Gromacs
 (`HA1/HA2`, `OC1/OC2`), Amber (`HA2/HA3`, `OXT`) and CHARMM (`HN`, `OT1/OT2`) spellings —
 and the side chain is its negation, so the list never has to grow with the residue types.
-The side-chain masks are restricted to amino-acid residues on purpose: a bare
-`!@N,CA,C,O,…` would take in every water molecule and every ligand.
+
+Neither protein mask names a residue. Matching every atom of a solvated system against a
+hundred-odd residue names is slow — on a 66 000-atom system a side-chain selection took
+42 s with the residue names and 7 s without. The masks are therefore **not** specific to
+amino acids: `PROTEIN_BACKBONE_MASK` also matches a ligand atom called `C`, `O` or `H1`, and
+`PROTEIN_SIDECHAIN_MASK` on its own takes in every water molecule, ion and ligand. Always
+combine them with the residues that are meant, as in the examples above. The nucleic masks
+are still restricted to nucleotide residues.
 
 Build your own the same way:
 
